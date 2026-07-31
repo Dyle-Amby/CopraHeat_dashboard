@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block heading %}Dashboard{% endblock %}
+
+{% block content %}
+
+<!-- phase track -->
+<div class="phase-track mb-4">
+  <div class="phase-node">
+    <div class="phase-dot done"></div>
+    <span style="font-size:0.75rem; color:var(--muted);">Intake</span>
+  </div>
+  <div class="phase-line"></div>
+  <div class="phase-node">
+    <div class="phase-dot current"></div>
+    <span style="font-size:0.75rem; font-weight:600;">Drying</span>
+  </div>
+  <div class="phase-line"></div>
+  <div class="phase-node">
+    <div class="phase-dot"></div>
+    <span style="font-size:0.75rem; color:var(--muted);">Sorting</span>
+  </div>
+</div>
+
+<div class="row g-4 mb-4">
+  <div class="col-lg-8">
+    <div class="card-panel h-100">
+      <div class="row">
+        <div class="col-4">
+          <p class="stat-label mb-1">Current phase</p>
+          <p class="stat-value" style="font-size:1.3rem;">Drying</p>
+          <p class="stat-label mb-0" style="font-size:0.72rem;">Static tray, closed-loop</p>
+        </div>
+        <div class="col-4 stat-row">
+          <i class="bi bi-thermometer-sun stat-icon"></i>
+          <div>
+            <p class="stat-label">Heaters</p>
+            <p class="stat-value">On</p>
+          </div>
+        </div>
+        <div class="col-4 stat-row">
+          <i class="bi bi-fan stat-icon"></i>
+          <div>
+            <p class="stat-label">Fans</p>
+            <p class="stat-value" style="color:var(--muted);">Idle</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-4">
+    <div class="card-panel h-100">
+      <p class="stat-label mb-1">Batch no.</p>
+      <p class="stat-value mb-3">10</p>
+      <p class="stat-label mb-1">Date</p>
+      <p class="stat-value mb-3" style="font-size:1rem;">Aug 21, 2026, Fri</p>
+      <p class="stat-label mb-1">Time elapsed</p>
+      <p class="stat-value" style="font-size:1rem;">2h 10m 47s</p>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-7">
+    <div class="card-panel h-100">
+      <h6 class="card-eyebrow">Recent sensor readings</h6>
+
+      <div class="reading-row">
+        <div class="label">Chamber temperature</div>
+        <div><span class="value">62&deg;C</span><span class="note">Within 60&ndash;70&deg;C threshold</span></div>
+      </div>
+      <hr class="hairline">
+      <div class="reading-row">
+        <div class="label">Humidity level</div>
+        <div><span class="value">44%</span><span class="note">Fans set to idle</span></div>
+      </div>
+      <hr class="hairline">
+      <div class="reading-row">
+        <div class="label">Weight loss</div>
+        <div><span class="value">18%</span><span class="note">Target &asymp;46% (gravimetric, 50%&rarr;6% moisture)</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-5">
+    <div class="card-panel h-100 text-center">
+      <h6 class="card-eyebrow text-start">Recent vision result &middot; staging pocket</h6>
+      <div class="vision-thumb"><i class="bi bi-image"></i></div>
+      <div class="d-flex justify-content-between align-items-center px-2 mb-3">
+        <span style="font-size:0.85rem; color:var(--muted);">Confidence rating</span>
+        <span class="stat-value">94%</span>
+      </div>
+      <div class="text-start px-2">
+        <div class="tally-row"><span>Great</span><span class="tally-great">19</span></div>
+        <div class="tally-row"><span>Good</span><span class="tally-okay">9</span></div>
+        <div class="tally-row"><span>Bad</span><span class="tally-bad">4</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

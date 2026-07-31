@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Sensor logs{% endblock %}
+{% block heading %}Sensor logs{% endblock %}
+
+{% block content %}
+<p style="font-size:0.85rem; color:var(--muted); margin-bottom:14px; margin-top:-12px;">Performance &middot; batch #10</p>
+
+<div class="row g-4">
+  <div class="col-lg-3">
+    <div class="card-panel h-100 p-2">
+      <div class="list-group metric-list" id="metricList">
+        <button type="button" class="list-group-item active" data-metric="chamber">Chamber temperature<span class="metric-sub">&deg;C</span></button>
+        <button type="button" class="list-group-item" data-metric="ambient">Ambient temperature<span class="metric-sub">&deg;C</span></button>
+        <button type="button" class="list-group-item" data-metric="weight">Weight loss<span class="metric-sub">%</span></button>
+        <button type="button" class="list-group-item" data-metric="humidity">Humidity level<span class="metric-sub">%</span></button>
+        <button type="button" class="list-group-item" data-metric="moisture">Moisture loss<span class="metric-sub">%</span></button>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-9">
+    <div class="card-panel h-100">
+      <div style="height:280px;"><canvas id="logChart"></canvas></div>
+      <div class="chart-stats">
+        <div><p class="cs-label">Cycle elapsed</p><p class="cs-value" id="statUtil">2h 10m of ~5.5h</p></div>
+        <div><p class="cs-label">Peak</p><p class="cs-value" id="statPeak">&mdash;</p></div>
+        <div><p class="cs-label">Average</p><p class="cs-value" id="statAvg">&mdash;</p></div>
+        <div><p class="cs-label">Lowest</p><p class="cs-value" id="statLow">&mdash;</p></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

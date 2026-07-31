@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Batch history{% endblock %}
+{% block heading %}Batch history{% endblock %}
+
+{% block content %}
+<div class="card-panel">
+  <table class="history-table" id="historyTable">
+    <thead>
+      <tr>
+        <th>Batch no.</th>
+        <th>Date</th>
+        <th>Time elapsed</th>
+        <th>Final moisture %</th>
+        <th>Great</th>
+        <th>Good</th>
+        <th>Bad</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for batch in batches %}
+      <tr>
+        <td>{{ batch.id }}</td>
+        <td>{{ batch.date }}</td>
+        <td>{{ batch.duration }}</td>
+        <td>{{ batch.moisture }}</td>
+        <td><span class="ratio-great">{{ batch.great }}</span></td>
+        <td><span class="ratio-okay">{{ batch.good }}</span></td>
+        <td><span class="ratio-bad">{{ batch.bad }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="d-flex justify-content-end mt-4">
+    <button class="btn-outline-ink" id="exportBtn"><i class="bi bi-download me-2"></i>Export history</button>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CORDS &middot; {% block title %}Dashboard{% endblock %}</title>
+
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+
+<div class="app-shell">
+
+  <div class="sidebar">
+    <div class="logo-diamond"><div class="logo-fill"></div></div>
+    <nav class="side-nav" aria-label="Dashboard sections">
+      <a class="nav-link {{ 'active' if active_page == 'dashboard' else '' }}" href="{{ url_for('dashboard') }}" aria-label="Dashboard"><i class="bi bi-grid-1x2-fill"></i></a>
+      <a class="nav-link {{ 'active' if active_page == 'logs' else '' }}" href="{{ url_for('sensor_logs') }}" aria-label="Sensor logs"><i class="bi bi-graph-up"></i></a>
+      <a class="nav-link {{ 'active' if active_page == 'history' else '' }}" href="{{ url_for('batch_history') }}" aria-label="Batch history"><i class="bi bi-clock-history"></i></a>
+      <a class="nav-link {{ 'active' if active_page == 'control' else '' }}" href="{{ url_for('control_panel') }}" aria-label="Control panel"><i class="bi bi-sliders"></i></a>
+    </nav>
+  </div>
+
+  <div class="main-content">
+    <div class="d-flex justify-content-between align-items-start mb-4">
+      <h1 class="page-title">{% block heading %}{% endblock %}</h1>
+      <div class="d-flex align-items-center gap-3">
+        <span class="power-pill"><i class="bi bi-plug-fill"></i>Grid AC &middot; stable</span>
+        <span class="bell-wrap"><i class="bi bi-bell"></i><span class="bell-dot"></span></span>
+      </div>
+    </div>
+    {% block content %}{% endblock %}
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

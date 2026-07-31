@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}Control panel{% endblock %}
+{% block heading %}Control panel{% endblock %}
+
+{% block content %}
+<div class="warning-banner">
+  <i class="bi bi-exclamation-triangle" style="font-size:1.1rem; color:var(--gold);"></i>
+  Manual overrides are for maintenance and testing only &mdash; keep disabled during automated drying cycles.
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-7">
+    <div class="card-panel mb-4">
+      <h6 class="card-eyebrow">System state</h6>
+      <div class="override-row">
+        <span class="override-label">Current state</span>
+        <span style="background:var(--cream-3); padding:4px 14px; border-radius:16px; font-weight:600; font-size:0.85rem;">Running</span>
+      </div>
+      <div class="override-row">
+        <span class="override-label">Heater override</span>
+        <div class="form-check form-switch">
+          <input class="form-check-input" type="checkbox" role="switch" aria-label="Toggle heater override">
+        </div>
+      </div>
+      <div class="override-row">
+        <span class="override-label">Fan override</span>
+        <div class="form-check form-switch">
+          <input class="form-check-input" type="checkbox" role="switch" aria-label="Toggle fan override">
+        </div>
+      </div>
+    </div>
+
+    <div class="card-panel">
+      <h6 class="card-eyebrow">Mechanism actions</h6>
+
+      <div class="override-row">
+        <div>
+          <span class="override-label">Hopper hatch</span>
+          <span class="override-sub">Releases the intake batch onto the drying tray</span>
+        </div>
+        <button class="btn-outline-ink momentary-btn" style="padding:6px 16px; font-size:0.85rem;">Force open</button>
+      </div>
+
+      <div class="override-row">
+        <div>
+          <span class="override-label">Chamber trapdoor</span>
+          <span class="override-sub">Drops the dried tray contents to the sorting chute</span>
+        </div>
+        <button class="btn-outline-ink momentary-btn" style="padding:6px 16px; font-size:0.85rem;">Open trapdoor</button>
+      </div>
+
+      <div class="override-row">
+        <div>
+          <span class="override-label">Staging pocket gate</span>
+          <span class="override-sub">Releases one piece into the imaging pocket</span>
+        </div>
+        <button class="btn-outline-ink momentary-btn" style="padding:6px 16px; font-size:0.85rem;">Release next piece</button>
+      </div>
+
+      <div class="override-row">
+        <div>
+          <span class="override-label">Diverter flap</span>
+          <span class="override-sub">Test position &mdash; aligns the flap before a piece is ever released</span>
+        </div>
+        <div class="flap-group">
+          <button class="flap-btn active" data-flap="great">Great</button>
+          <button class="flap-btn" data-flap="good">Good</button>
+          <button class="flap-btn" data-flap="bad">Bad</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-5">
+    <div class="card-panel h-100 d-flex flex-column justify-content-between">
+      <div>
+        <h6 class="card-eyebrow">Emergency</h6>
+        <p style="font-size:0.85rem; color:var(--muted);">Immediately cuts power to heaters, fans, and all servo-actuated gates. Requires physical reset.</p>
+      </div>
+      <button class="btn-danger-muted"><i class="bi bi-power me-2"></i>Emergency stop</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
