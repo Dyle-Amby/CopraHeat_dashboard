@@ -1,6 +1,6 @@
 # CopraHeat Dashboard · CORDS
 
-> **CORDS** — Copra dRying & sOrting Dashboard System  
+> **CORDS** — Copra drying & sorting Dashboard System  
 > A Raspberry Pi–hosted web dashboard for monitoring and controlling an automated copra drying and sorting machine.
 
 ---
