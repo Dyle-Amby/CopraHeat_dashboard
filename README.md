@@ -131,7 +131,7 @@ The dashboard is designed to interface with a custom copra processing machine th
 - **Drying chamber** with heater elements and fans (closed-loop temperature/humidity control)
 - **Load cell / scale** for gravimetric moisture estimation (target: ~46% weight loss, corresponding to ≤6% final moisture)
 - **Hopper** with a servo-actuated hatch for batch intake
-- **Trapdoor** releasing dried copra to the sorting chute
+- **Conveyor Belt** moves the copra batch to each phase of the prototype
 - **Staging pocket** with a gate that feeds individual pieces into an imaging pocket
 - **Computer-vision module** (camera + model) that grades each piece as *Great*, *Good*, or *Bad*
 - **Diverter flap** that routes each graded piece to the correct output bin
