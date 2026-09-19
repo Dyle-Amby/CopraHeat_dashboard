@@ -22,7 +22,7 @@ class HysteresisBand:
 
 
 class HeaterController:
-    """Two-point hysteresis for the IR heaters.
+    """Two-point hysteresis for the IR heaters, active only while DRYING.
 
     A reading of None (sensor fault) or anything at/above max_temp forces the
     heaters OFF regardless of band state. Mains heaters fail safe, not warm.
@@ -36,17 +36,15 @@ class HeaterController:
         self.heater_on = False
         self.fault = False
 
-    def update(self, temp_c: float | None) -> bool:
-        if temp_c is None or temp_c >= self.max_temp:
-            self.fault = True
+    def update(self, state: BatchState, temp_c: float | None) -> bool:
+        self.fault = temp_c is None or temp_c >= self.max_temp
+        if self.fault or state is not BatchState.DRYING:
             self.heater_on = False
-        else:
-            self.fault = False
-            if temp_c <= self.band.low:
-                self.heater_on = True
-            elif temp_c >= self.band.high:
-                self.heater_on = False
-            # inside the band: hold the previous state
+        elif temp_c <= self.band.low:
+            self.heater_on = True
+        elif temp_c >= self.band.high:
+            self.heater_on = False
+        # inside the band: hold the previous state
         return self.heater_on
 
 

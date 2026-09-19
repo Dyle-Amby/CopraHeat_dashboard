@@ -49,7 +49,11 @@ CopraHeat_dashboard/
 ├── requirements.txt        # Python dependencies
 ├── hardware/
 │   ├── __init__.py
-│   └── pins.py             # GPIO pin map — single source of truth (BCM numbering)
+│   ├── pins.py             # GPIO pin map — single source of truth (BCM numbering)
+│   ├── climate.py          # Heater hysteresis + fan interlock logic (no GPIO; unit-tested)
+│   ├── sensors.py          # DS18B20 / DHT22 readers via kernel sysfs
+│   └── run_climate.py      # Bench loop: sensors → controllers → SSR / fan relay
+├── tests/                  # python -m unittest discover -s tests
 ├── static/
 │   ├── css/
 │   │   └── style.css       # Custom design system & component styles
@@ -167,6 +171,7 @@ Free: GPIO25 (pin 22). Reserved: GPIO2/3 (I²C), GPIO14/15 (UART), GPIO19 (kept 
 - SPI must stay **disabled** in `raspi-config` — GPIO7–11 are the SPI0 block and carry four HX711 lines.
 - 10 kΩ pull-downs on the heater SSR trigger (GPIO5 → GND) and on the fan transistor base, so neither can fire while GPIO floats during boot or a crashed control process.
 - 4.7 kΩ pull-up on the DS18B20 data line, plus `dtoverlay=w1-gpio,gpiopin=4` in `/boot/firmware/config.txt`.
+- DHT22 is read through the kernel IIO driver, not a Python bit-bang library (unreliable on the Pi 5's RP1): add `dtoverlay=dht11,gpiopin=26` to `config.txt` — the `dht11` driver handles DHT22 as well.
 - The servo uses hardware PWM — needs a `pwm` dtoverlay; confirm with `pinctrl get 18` after boot.
 - Limit switches are wired normally-closed with internal pull-ups, so a broken wire reads as "stop".
 - Use `gpiozero` (lgpio backend). Legacy `RPi.GPIO` does not work on the Pi 5's RP1 GPIO controller.
