@@ -37,7 +37,7 @@ Intake → Drying (closed-loop, static tray) → Sorting (vision-based grading)
 | Frontend | HTML5 · Vanilla CSS · Bootstrap 5.3 · Bootstrap Icons 1.11 |
 | Charts | [Chart.js](https://www.chartjs.org/) 4.4 |
 | Fonts | Space Grotesk · Inter (Google Fonts) |
-| Target hardware | Raspberry Pi (any model with network access) |
+| Target hardware | Raspberry Pi 5 (GPIO via `gpiozero` / lgpio) |
 
 ---
 
@@ -47,6 +47,9 @@ Intake → Drying (closed-loop, static tray) → Sorting (vision-based grading)
 CopraHeat_dashboard/
 ├── app.py                  # Flask application & route definitions
 ├── requirements.txt        # Python dependencies
+├── hardware/
+│   ├── __init__.py
+│   └── pins.py             # GPIO pin map — single source of truth (BCM numbering)
 ├── static/
 │   ├── css/
 │   │   └── style.css       # Custom design system & component styles
@@ -126,15 +129,47 @@ Sensor readings shown on the Dashboard and Sensor Logs pages are similarly inten
 
 ## Hardware Context
 
-The dashboard is designed to interface with a custom copra processing machine that includes:
+The dashboard is the operator interface for a custom copra processing machine, controlled entirely by a Raspberry Pi 5:
 
-- **Drying chamber** with heater elements and fans (closed-loop temperature/humidity control)
-- **Load cell / scale** for gravimetric moisture estimation (target: ~46% weight loss, corresponding to ≤6% final moisture)
-- **Hopper** with a servo-actuated hatch for batch intake
-- **Trapdoor** releasing dried copra to the sorting chute
-- **Staging pocket** with a gate that feeds individual pieces into an imaging pocket
-- **Computer-vision module** (camera + model) that grades each piece as *Great*, *Good*, or *Bad*
-- **Diverter flap** that routes each graded piece to the correct output bin
+- **Hopper** with an MG996R servo gate, held closed under load and opened when the hopper's HX711 load cell reads the target batch weight
+- **Conveyor** — heat-resistant stainless steel mesh belt, driven by a 57HS82 stepper via an HBS57H driver
+- **Drying chamber** — 3× 220 V ceramic IR heater bulbs switched by a Fotek SSR, with a 60–70 °C two-point hysteresis loop on a DS18B20 probe; 24 V intake/exhaust fans switched together via a Songle relay
+- **Ambient sensing** — DHT22 for ambient temperature and humidity
+- **Computer-vision module** — Camera Module 3 + MobileNetV3Small (`cords_model.tflite`) grading each piece as *Great*, *Good*, or *Bad*
+- **Bin carriage** — 57BYGH420 stepper via a TB6600 driver, moving vertically between three bin heights; three normally-closed limit switches act as hard position stops
+- **Bin load cells** — one HX711 per output bin; target weight loss during drying is ~43–47% (≈50% → ≤6% moisture)
+
+---
+
+## Hardware Pin Map
+
+[`hardware/pins.py`](hardware/pins.py) is the single source of truth for GPIO assignments (BCM numbering). Every control script imports from it — never hardcode a pin number elsewhere.
+
+| Subsystem | Signal | BCM | Physical pin |
+|---|---|---|---|
+| Sensors | DS18B20 data (1-Wire) | 4 | 7 |
+| | DHT22 data | 26 | 37 |
+| Load cells | HX711 Hopper — DOUT / SCK | 7 / 8 | 26 / 24 |
+| | HX711 Bin-Great — DOUT / SCK | 9 / 10 | 21 / 19 |
+| | HX711 Bin-Good — DOUT / SCK | 11 / 12 | 23 / 32 |
+| | HX711 Bin-Bad — DOUT / SCK | 13 / 16 | 33 / 36 |
+| Motors | TB6600 PUL / DIR (bin carriage) | 17 / 27 | 11 / 13 |
+| | HBS57H PUL / DIR (conveyor) | 22 / 23 | 15 / 16 |
+| Servo | MG996R hopper gate (hardware PWM) | 18 | 12 |
+| Limit switches | Switch 1 / 2 / 3 | 24 / 20 / 21 | 18 / 38 / 40 |
+| Triggers | Fotek SSR (heaters) | 5 | 29 |
+| | Fan relay (via 2N2222) | 6 | 31 |
+
+Free: GPIO25 (pin 22). Reserved: GPIO2/3 (I²C), GPIO14/15 (UART), GPIO19 (kept clear for the servo's PWM pair). Never use GPIO0/1 (HAT EEPROM).
+
+**Board and OS requirements**
+
+- SPI must stay **disabled** in `raspi-config` — GPIO7–11 are the SPI0 block and carry four HX711 lines.
+- 10 kΩ pull-downs on the heater SSR trigger (GPIO5 → GND) and on the fan transistor base, so neither can fire while GPIO floats during boot or a crashed control process.
+- 4.7 kΩ pull-up on the DS18B20 data line, plus `dtoverlay=w1-gpio,gpiopin=4` in `/boot/firmware/config.txt`.
+- The servo uses hardware PWM — needs a `pwm` dtoverlay; confirm with `pinctrl get 18` after boot.
+- Limit switches are wired normally-closed with internal pull-ups, so a broken wire reads as "stop".
+- Use `gpiozero` (lgpio backend). Legacy `RPi.GPIO` does not work on the Pi 5's RP1 GPIO controller.
 
 ---
 
