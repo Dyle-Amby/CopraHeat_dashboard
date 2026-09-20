@@ -181,6 +181,7 @@ Free: GPIO25 (pin 22). Reserved: GPIO2/3 (I²C), GPIO14/15 (UART), GPIO19 (kept 
 - DHT22 is read through the kernel IIO driver, not a Python bit-bang library (unreliable on the Pi 5's RP1): add `dtoverlay=dht11,gpiopin=26` to `config.txt` — the `dht11` driver handles DHT22 as well.
 - The servo uses hardware PWM: add `dtoverlay=pwm-2chan` to `config.txt`, then confirm with `pinctrl get 18` and `ls /sys/class/pwm/`. GPIO18 is expected to be chip 2 / channel 2 on the Pi 5 — verify on the bench and pass `--pwm-chip` / `--pwm-channel` to `run_hopper` if different.
 - HX711 tare offsets and scale are per-machine: run `python -m hardware.run_hopper --calibrate` after fabrication and pass the printed flags. The hopper cell is mounted on the gate, so it is tared in both the closed and open positions.
+- Stepper driver inputs (TB6600, HBS57H) are rated 5–24 V, so PUL/DIR go through a **74HCT125 or 74HCT245** buffer (3.3 V in, 5 V out, powered from the Pi's 5 V pin, all OE pins to GND). A BSS138 bidirectional shifter only works here in common-anode wiring (PUL+/DIR+ to 5 V, shifter on PUL−/DIR−, inverted logic) and then sinks the full ~14 mA opto current through the Pi's GPIO pad — acceptable for bench testing, not the final build.
 - Limit switches are wired normally-closed with internal pull-ups, so a broken wire reads as "stop".
 - Use `gpiozero` (lgpio backend). Legacy `RPi.GPIO` does not work on the Pi 5's RP1 GPIO controller.
 
