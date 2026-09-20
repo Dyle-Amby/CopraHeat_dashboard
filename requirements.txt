@@ -1,2 +1,5 @@
 Flask>=3.0
-gpiozero>=2.0   # Pi-only at runtime; uses the lgpio backend on Pi OS Bookworm
+gpiozero>=2.0           # Pi-only at runtime; uses the lgpio backend on Pi OS Bookworm
+rpi-hardware-pwm>=0.2   # Pi-only at runtime; hopper servo on GPIO18
+# lgpio (HX711 bit-bang) comes from Pi OS's python3-lgpio system package --
+# create the venv with --system-site-packages so it is visible.

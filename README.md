@@ -51,8 +51,12 @@ CopraHeat_dashboard/
 │   ├── __init__.py
 │   ├── pins.py             # GPIO pin map — single source of truth (BCM numbering)
 │   ├── climate.py          # Heater hysteresis + fan interlock logic (no GPIO; unit-tested)
+│   ├── hopper.py           # Hopper gate state machine + stable-weight filter (no GPIO; unit-tested)
 │   ├── sensors.py          # DS18B20 / DHT22 readers via kernel sysfs
-│   └── run_climate.py      # Bench loop: sensors → controllers → SSR / fan relay
+│   ├── hx711.py            # HX711 load-cell driver, bit-banged through lgpio
+│   ├── servo.py            # MG996R on hardware PWM (rpi-hardware-pwm)
+│   ├── run_climate.py      # Bench loop: sensors → controllers → SSR / fan relay
+│   └── run_hopper.py       # Bench loop + --calibrate: HX711 → gate logic → servo
 ├── tests/                  # python -m unittest discover -s tests
 ├── static/
 │   ├── css/
@@ -83,11 +87,13 @@ CopraHeat_dashboard/
 git clone <repo-url>
 cd CopraHeat_dashboard
 
-# 2. (Optional) Create a virtual environment
+# 2. Create a virtual environment
+#    Windows (dashboard + unit tests only)
 python -m venv .venv
-# Windows
 .venv\Scripts\activate
-# Linux / Raspberry Pi OS
+#    Raspberry Pi OS — required (PEP 668 blocks system pip), and it MUST see the
+#    system packages: lgpio and picamera2 come from apt, not pip.
+python -m venv --system-site-packages .venv
 source .venv/bin/activate
 
 # 3. Install dependencies
@@ -172,7 +178,8 @@ Free: GPIO25 (pin 22). Reserved: GPIO2/3 (I²C), GPIO14/15 (UART), GPIO19 (kept 
 - 10 kΩ pull-downs on the heater SSR trigger (GPIO5 → GND) and on the fan transistor base, so neither can fire while GPIO floats during boot or a crashed control process.
 - 4.7 kΩ pull-up on the DS18B20 data line, plus `dtoverlay=w1-gpio,gpiopin=4` in `/boot/firmware/config.txt`.
 - DHT22 is read through the kernel IIO driver, not a Python bit-bang library (unreliable on the Pi 5's RP1): add `dtoverlay=dht11,gpiopin=26` to `config.txt` — the `dht11` driver handles DHT22 as well.
-- The servo uses hardware PWM — needs a `pwm` dtoverlay; confirm with `pinctrl get 18` after boot.
+- The servo uses hardware PWM: add `dtoverlay=pwm-2chan` to `config.txt`, then confirm with `pinctrl get 18` and `ls /sys/class/pwm/`. GPIO18 is expected to be chip 2 / channel 2 on the Pi 5 — verify on the bench and pass `--pwm-chip` / `--pwm-channel` to `run_hopper` if different.
+- HX711 tare offsets and scale are per-machine: run `python -m hardware.run_hopper --calibrate` after fabrication and pass the printed flags. The hopper cell is mounted on the gate, so it is tared in both the closed and open positions.
 - Limit switches are wired normally-closed with internal pull-ups, so a broken wire reads as "stop".
 - Use `gpiozero` (lgpio backend). Legacy `RPi.GPIO` does not work on the Pi 5's RP1 GPIO controller.
 
