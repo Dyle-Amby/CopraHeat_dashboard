@@ -52,6 +52,7 @@ CopraHeat_dashboard/
 │   ├── pins.py             # GPIO pin map — single source of truth (BCM numbering)
 │   ├── climate.py          # Heater hysteresis + fan interlock logic (no GPIO; unit-tested)
 │   ├── hopper.py           # Hopper gate state machine + stable-weight filter (no GPIO; unit-tested)
+│   ├── drying.py           # Drying endpoint from exhaust absolute humidity (no GPIO; unit-tested)
 │   ├── sensors.py          # DS18B20 / DHT22 readers via kernel sysfs
 │   ├── hx711.py            # HX711 load-cell driver, bit-banged through lgpio
 │   ├── servo.py            # MG996R on hardware PWM (rpi-hardware-pwm)
