@@ -6,9 +6,12 @@ drying endpoint reached from a physically-shaped humidity curve rather than a
 stub flag.
 """
 
+import tempfile
 import unittest
+from pathlib import Path
 
-from hardware.batch import BatchController, Inputs
+from hardware import db
+from hardware.batch import BatchController, Inputs, apply_command
 from hardware.conveyor import SimulatedConveyor
 from hardware.simulate import SimulatedMachine
 from hardware.states import BatchState
@@ -120,6 +123,65 @@ class TestAbortedBatch(unittest.TestCase):
         controller, log = run_batch(abort_when=lambda cmd, sim: cmd.state is BatchState.INTAKE)
         self.assertIs(controller.state, BatchState.ABORTED)
         self.assertNotIn(BatchState.COOLDOWN, {cmd.state for cmd in log})
+
+
+class TestCommandQueue(unittest.TestCase):
+    """The database as IPC: what Flask writes, the supervisor acts on."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.conn = db.connect(Path(self._tmp.name) / "cords.db")
+        db.init(self.conn)
+        self.controller = BatchController()
+
+    def tearDown(self):
+        self.conn.close()
+        self._tmp.cleanup()
+
+    def drain(self):
+        """Exactly what run_cords does each tick."""
+        for row in db.pending_commands(self.conn):
+            try:
+                db.resolve_command(
+                    self.conn, row["id"], db.DONE,
+                    apply_command(self.controller, row["name"], row["payload"]),
+                )
+            except (RuntimeError, ValueError) as exc:
+                db.resolve_command(self.conn, row["id"], db.REJECTED, str(exc))
+
+    def test_a_queued_start_reaches_the_state_machine(self):
+        command_id = db.queue_command(self.conn, "start")
+        self.drain()
+        self.assertEqual(db.command_status(self.conn, command_id)["status"], db.DONE)
+        self.assertIs(self.controller.update(Inputs(now=0.0)).state, BatchState.INTAKE)
+
+    def test_a_refusal_carries_the_machines_own_words_back(self):
+        command_id = db.queue_command(self.conn, "end_drying")
+        self.drain()
+        row = db.command_status(self.conn, command_id)
+        self.assertEqual(row["status"], db.REJECTED)
+        self.assertIn("not drying", row["result"])
+
+    def test_a_junk_payload_is_rejected_rather_than_crashing_the_loop(self):
+        command_id = db.queue_command(self.conn, "set_target_kg", "heavy")
+        self.drain()   # must not raise: a bad command cannot take the machine down
+        self.assertEqual(db.command_status(self.conn, command_id)["status"], db.REJECTED)
+
+    def test_commands_are_applied_in_the_order_they_were_queued(self):
+        db.queue_command(self.conn, "set_target_kg", "3.0")
+        db.queue_command(self.conn, "start")
+        self.drain()
+        self.assertEqual(self.controller.target_kg, 3.0)
+        self.assertIs(self.controller.update(Inputs(now=0.0)).state, BatchState.INTAKE)
+
+    def test_a_finished_batch_lands_in_the_batches_table(self):
+        batch_id = db.start_batch(self.conn, target_kg=2.0)
+        controller, _ = run_batch()
+        db.finish_batch(self.conn, batch_id, controller.record(), controller.state.value)
+        row = db.get_batch(self.conn, batch_id)
+        self.assertEqual(row["state"], "complete")
+        self.assertAlmostEqual(row["weight_loss_pct"], 45.0, places=3)
+        self.assertIsNotNone(row["finished_at"])
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 import unittest
 
-from hardware.batch import BatchController, Inputs
+from hardware.batch import COMMAND_NAMES, BatchController, Inputs, apply_command
 from hardware.climate import FanController
 from hardware.drying import DryingEndpoint
 from hardware.states import BatchState, ConveyorCommand
@@ -354,6 +354,63 @@ class TestRecord(unittest.TestCase):
         self.assertTrue(r.aborted)
         self.assertEqual(r.abort_reason, "operator abort")
         self.assertIn("aborted", r.alarms)
+
+
+class TestApplyCommand(unittest.TestCase):
+    def test_start_is_dispatched_by_name(self):
+        c = make()
+        apply_command(c, "start")
+        self.assertIs(c.update(Inputs(now=0.0)).state, INTAKE)
+
+    def test_abort_carries_its_reason_through_the_payload(self):
+        c = make()
+        to_intake(c)
+        apply_command(c, "abort", "smoke in the chamber")
+        c.update(Inputs(now=1.0, chamber_temp=25.0))
+        self.assertEqual(c.abort_reason, "smoke in the chamber")
+
+    def test_abort_without_a_payload_still_works(self):
+        c = make()
+        to_intake(c)
+        apply_command(c, "abort")
+        c.update(Inputs(now=1.0, chamber_temp=25.0))
+        self.assertEqual(c.abort_reason, "operator abort")
+
+    def test_set_target_kg_parses_its_payload(self):
+        c = make()
+        apply_command(c, "set_target_kg", "3.5")
+        self.assertEqual(c.target_kg, 3.5)
+
+    def test_set_target_kg_without_a_payload_is_refused(self):
+        with self.assertRaises(ValueError):
+            apply_command(make(), "set_target_kg")
+
+    def test_a_junk_payload_is_refused(self):
+        with self.assertRaises(ValueError):
+            apply_command(make(), "set_target_kg", "heavy")
+
+    def test_unknown_names_are_refused(self):
+        with self.assertRaises(ValueError):
+            apply_command(make(), "launch_missiles")
+
+    def test_the_refusal_message_names_the_current_state(self):
+        c = make()
+        to_drying(c)
+        with self.assertRaises(RuntimeError) as caught:
+            apply_command(c, "start")
+        self.assertIn("drying", str(caught.exception))
+
+    def test_every_name_in_the_vocabulary_dispatches(self):
+        # a name in COMMAND_NAMES that apply_command does not handle would raise
+        # ValueError("unknown command"); a state refusal is RuntimeError
+        for name in COMMAND_NAMES:
+            with self.subTest(name=name):
+                try:
+                    apply_command(make(), name, "1.0")
+                except ValueError as exc:
+                    self.fail(f"{name} is not dispatched: {exc}")
+                except RuntimeError:
+                    pass   # refused by state, which means it was dispatched
 
 
 class TestAbortAndReset(unittest.TestCase):

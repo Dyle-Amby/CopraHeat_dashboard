@@ -20,6 +20,12 @@ from hardware.states import BatchState, ConveyorCommand
 _LIVE = (BatchState.INTAKE, BatchState.DRYING, BatchState.COOLDOWN, BatchState.SORTING)
 _FINISHED = (BatchState.COMPLETE, BatchState.ABORTED)
 
+# The operator vocabulary, kept next to the methods it maps to. The data layer
+# validates against it and the supervisor dispatches with apply_command().
+COMMAND_NAMES = frozenset(
+    {"start", "end_drying", "finish_sorting", "abort", "reset", "set_target_kg"}
+)
+
 
 @dataclass(frozen=True)
 class Inputs:
@@ -63,6 +69,39 @@ class BatchRecord:
     aborted: bool
     abort_reason: str | None
     alarms: frozenset[str]
+
+
+def apply_command(controller: "BatchController", name: str, payload: str | None = None) -> str:
+    """Dispatch an operator command by name and return what to tell the operator.
+
+    Raises ValueError for a name or payload that makes no sense, and RuntimeError
+    (from the controller) for a request the machine refuses in its current state.
+    Callers turn either into the message shown next to the button, so a
+    double-tapped Start reads "cannot start from drying" rather than doing
+    nothing quietly.
+    """
+    if name == "start":
+        controller.start()
+        return "batch will start on the next tick"
+    if name == "end_drying":
+        controller.end_drying()
+        return "drying will end on the next tick"
+    if name == "finish_sorting":
+        controller.finish_sorting()
+        return "sorting will end on the next tick"
+    if name == "abort":
+        reason = payload or "operator abort"
+        controller.abort(reason)
+        return f"aborting: {reason}"
+    if name == "reset":
+        controller.reset()
+        return "returning to idle"
+    if name == "set_target_kg":
+        if payload is None:
+            raise ValueError("set_target_kg needs a target weight")
+        controller.set_target_kg(float(payload))   # float() rejects junk payloads
+        return f"target weight set to {controller.target_kg} kg"
+    raise ValueError(f"unknown command {name!r}")
 
 
 class BatchController:
