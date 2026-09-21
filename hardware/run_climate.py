@@ -14,7 +14,12 @@ import time
 from datetime import datetime
 
 from hardware import pins, sensors
-from hardware.climate import BatchState, FanController, HeaterController
+from hardware.climate import FanController, HeaterController
+from hardware.states import BatchState
+
+
+# the climate loop only has opinions about these three; the rest are the orchestrator's
+CLIMATE_STATES = (BatchState.IDLE, BatchState.DRYING, BatchState.COOLDOWN)
 
 
 def fmt(value: float | None, unit: str = "C") -> str:
@@ -23,7 +28,7 @@ def fmt(value: float | None, unit: str = "C") -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--state", choices=[s.value for s in BatchState], default=BatchState.IDLE.value)
+    ap.add_argument("--state", choices=[s.value for s in CLIMATE_STATES], default=BatchState.IDLE.value)
     ap.add_argument("--interval", type=float, default=2.0, help="seconds between readings (DHT22 minimum is 2)")
     ap.add_argument("--dry-run", action="store_true", help="print decisions without touching GPIO")
     args = ap.parse_args()

@@ -50,6 +50,8 @@ CopraHeat_dashboard/
 ├── hardware/
 │   ├── __init__.py
 │   ├── pins.py             # GPIO pin map — single source of truth (BCM numbering)
+│   ├── states.py           # BatchState / ConveyorCommand — shared vocabulary
+│   ├── batch.py            # Batch state machine: Intake → Drying → Sorting (no GPIO; unit-tested)
 │   ├── climate.py          # Heater hysteresis + fan interlock logic (no GPIO; unit-tested)
 │   ├── hopper.py           # Hopper gate state machine + stable-weight filter (no GPIO; unit-tested)
 │   ├── drying.py           # Drying endpoint from exhaust absolute humidity (no GPIO; unit-tested)

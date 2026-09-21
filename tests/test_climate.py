@@ -1,6 +1,7 @@
 import unittest
 
-from hardware.climate import BatchState, FanController, HeaterController, HysteresisBand
+from hardware.climate import FanController, HeaterController, HysteresisBand
+from hardware.states import BatchState
 
 IDLE, DRYING, COOLDOWN = BatchState.IDLE, BatchState.DRYING, BatchState.COOLDOWN
 

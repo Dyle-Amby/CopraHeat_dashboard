@@ -2,13 +2,8 @@
 
 import math
 from dataclasses import dataclass
-from enum import Enum
 
-
-class BatchState(Enum):
-    IDLE = "idle"
-    DRYING = "drying"
-    COOLDOWN = "cooldown"
+from hardware.states import BatchState
 
 
 @dataclass(frozen=True)
