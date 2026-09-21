@@ -58,6 +58,9 @@ CopraHeat_dashboard/
 │   ├── sensors.py          # DS18B20 / DHT22 readers via kernel sysfs
 │   ├── hx711.py            # HX711 load-cell driver, bit-banged through lgpio
 │   ├── servo.py            # MG996R on hardware PWM (rpi-hardware-pwm)
+│   ├── conveyor.py         # Conveyor interface; simulated until the stepper driver lands
+│   ├── simulate.py         # Fake machine for --simulate runs (test fixture, not production)
+│   ├── run_cords.py        # Supervisor: the one process that owns every pin
 │   ├── run_climate.py      # Bench loop: sensors → controllers → SSR / fan relay
 │   └── run_hopper.py       # Bench loop + --calibrate: HX711 → gate logic → servo
 ├── tests/                  # python -m unittest discover -s tests
@@ -108,6 +111,20 @@ pip install -r requirements.txt
 ```bash
 python app.py
 ```
+
+### Running the Machine
+
+The supervisor owns every pin; the dashboard never touches GPIO.
+
+```bash
+# whole batch against a fake machine, no hardware needed (minutes, not hours)
+python -m hardware.run_cords --simulate --speed 60 --interval 0.02 --start --exit-on-finish
+
+# on the Pi, with calibration values from `run_hopper --calibrate`
+python -m hardware.run_cords --start --scale 21500 --offset-closed 84210 --offset-open 83950
+```
+
+`run_climate.py` and `run_hopper.py` remain for single-subsystem bench work.
 
 The server binds to `0.0.0.0:5000`, making the dashboard reachable from any device on the same network:
 
