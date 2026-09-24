@@ -5,7 +5,7 @@
 {% block content %}
 <div class="warning-banner">
   <i class="bi bi-exclamation-triangle" style="font-size:1.1rem; color:var(--gold);"></i>
-  Manual overrides are for maintenance and testing only &mdash; keep disabled during automated drying cycles.
+  Every action here is a request to the machine. It is checked against the current phase and refused, with a reason, if it does not apply.
 </div>
 
 <div class="row g-4">
@@ -13,72 +13,76 @@
     <div class="card-panel mb-4">
       <h6 class="card-eyebrow">System state</h6>
       <div class="override-row">
-        <span class="override-label">Current state</span>
-        <span style="background:var(--cream-3); padding:4px 14px; border-radius:16px; font-weight:600; font-size:0.85rem;">Running</span>
+        <span class="override-label">Current phase</span>
+        <span class="state-badge" id="stateBadge">&mdash;</span>
       </div>
       <div class="override-row">
-        <span class="override-label">Heater override</span>
-        <div class="form-check form-switch">
-          <input class="form-check-input" type="checkbox" role="switch" aria-label="Toggle heater override">
+        <div>
+          <span class="override-label">Target batch weight</span>
+          <span class="override-sub">Hopper gate opens at this weight. Can only be changed before the hopper dispenses.</span>
         </div>
-      </div>
-      <div class="override-row">
-        <span class="override-label">Fan override</span>
-        <div class="form-check form-switch">
-          <input class="form-check-input" type="checkbox" role="switch" aria-label="Toggle fan override">
-        </div>
+        <form class="d-flex align-items-center gap-2" id="targetForm">
+          <input type="number" class="cp-input" id="targetInput" min="0.1" step="0.1" aria-label="Target weight in kilograms" required>
+          <span class="stat-label">kg</span>
+          <button type="submit" class="btn-outline-ink cp-btn" data-command="set_target_kg">Set</button>
+        </form>
       </div>
     </div>
 
     <div class="card-panel">
-      <h6 class="card-eyebrow">Mechanism actions</h6>
+      <h6 class="card-eyebrow">Batch actions</h6>
 
       <div class="override-row">
         <div>
-          <span class="override-label">Hopper hatch</span>
-          <span class="override-sub">Releases the intake batch onto the drying tray</span>
+          <span class="override-label">Start batch</span>
+          <span class="override-sub">Begins intake: fill the hopper, dispense, carry the batch into the chamber</span>
         </div>
-        <button class="btn-outline-ink momentary-btn" style="padding:6px 16px; font-size:0.85rem;">Force open</button>
+        <button class="btn-ink cp-btn" data-command="start">Start</button>
       </div>
 
       <div class="override-row">
         <div>
-          <span class="override-label">Chamber trapdoor</span>
-          <span class="override-sub">Drops the dried tray contents to the sorting chute</span>
+          <span class="override-label">End drying now</span>
+          <span class="override-sub">Manual endpoint while the humidity thresholds are still being calibrated. Goes to cooldown.</span>
         </div>
-        <button class="btn-outline-ink momentary-btn" style="padding:6px 16px; font-size:0.85rem;">Open trapdoor</button>
+        <button class="btn-outline-ink cp-btn" data-command="end_drying" data-confirm="End drying now and move to cooldown?">End drying</button>
       </div>
 
       <div class="override-row">
         <div>
-          <span class="override-label">Staging pocket gate</span>
-          <span class="override-sub">Releases one piece into the imaging pocket</span>
+          <span class="override-label">Finish sorting</span>
+          <span class="override-sub">Marks the last piece sorted and closes the batch record</span>
         </div>
-        <button class="btn-outline-ink momentary-btn" style="padding:6px 16px; font-size:0.85rem;">Release next piece</button>
+        <button class="btn-outline-ink cp-btn" data-command="finish_sorting" data-confirm="Mark sorting as finished?">Finish sorting</button>
       </div>
 
       <div class="override-row">
         <div>
-          <span class="override-label">Diverter flap</span>
-          <span class="override-sub">Test position &mdash; aligns the flap before a piece is ever released</span>
+          <span class="override-label">Reset to idle</span>
+          <span class="override-sub">Clears a completed or aborted batch so a new one can start</span>
         </div>
-        <div class="flap-group">
-          <button class="flap-btn active" data-flap="great">Great</button>
-          <button class="flap-btn" data-flap="good">Good</button>
-          <button class="flap-btn" data-flap="bad">Bad</button>
-        </div>
+        <button class="btn-outline-ink cp-btn" data-command="reset">Reset</button>
       </div>
+
+      <p class="cmd-feedback" id="cmdFeedback" role="status" aria-live="polite"></p>
     </div>
   </div>
 
   <div class="col-lg-5">
     <div class="card-panel h-100 d-flex flex-column justify-content-between">
       <div>
-        <h6 class="card-eyebrow">Emergency</h6>
-        <p style="font-size:0.85rem; color:var(--muted);">Immediately cuts power to heaters, fans, and all servo-actuated gates. Requires physical reset.</p>
+        <h6 class="card-eyebrow">Abort batch</h6>
+        <p style="font-size:0.85rem; color:var(--muted);">Stops the batch in software. Heaters go off at once; a hot chamber is purged through cooldown before the batch is marked aborted, so the fans may keep running.</p>
+        <p style="font-size:0.8rem; color:var(--muted);">This is not an emergency stop. An e-stop has to cut heater and motor power in hardware, independent of the Pi and this page.</p>
+        <label class="stat-label mb-1" for="abortReason">Reason (saved with the batch)</label>
+        <input type="text" class="cp-input w-100 mb-3" id="abortReason" maxlength="200" placeholder="e.g. smoke from the chamber">
       </div>
-      <button class="btn-danger-muted"><i class="bi bi-power me-2"></i>Emergency stop</button>
+      <button class="btn-danger-muted cp-btn" data-command="abort" data-confirm="Abort the current batch?"><i class="bi bi-stop-circle me-2"></i>Abort batch</button>
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/control_panel.js') }}"></script>
 {% endblock %}

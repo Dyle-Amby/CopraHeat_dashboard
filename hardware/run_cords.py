@@ -193,9 +193,21 @@ def main(argv: list[str] | None = None) -> None:
     if not args.no_db:
         conn = db.connect(args.db)
         db.init(conn)
+        # two supervisors would fight over the pins, and this one's startup
+        # clean-up would close out the other's live batch as "interrupted"
+        other = db.live_state(conn)
+        if other is not None and other["running"]:
+            sys.exit(
+                f"another supervisor (pid {other['supervisor_pid']}) is running against this "
+                f"database, last heartbeat {other['age_s']:.0f}s ago. Stop it first; if it "
+                "crashed, its heartbeat goes stale within 10 s."
+            )
         interrupted = db.mark_interrupted_batches(conn)
         if interrupted:
             print(f"closed out {interrupted} batch row(s) left unfinished by a previous run")
+        expired = db.expire_pending_commands(conn)
+        if expired:
+            print(f"expired {expired} command(s) queued while no supervisor was running")
     overrides = resolve_settings(args, conn)
 
     controller = BatchController(target_kg=args.target_kg)
@@ -243,6 +255,10 @@ def main(argv: list[str] | None = None) -> None:
                     try:
                         message = apply_command(controller, row["name"], row["payload"])
                         db.resolve_command(conn, row["id"], db.DONE, message)
+                        if row["name"] == "set_target_kg":
+                            # keep it across restarts, or the next run silently
+                            # reverts to whatever the table held before
+                            db.set_setting(conn, "target_kg", controller.target_kg)
                         print(f"{stamp()}  command {row['name']}: {message}")
                     except (RuntimeError, ValueError) as exc:
                         db.resolve_command(conn, row["id"], db.REJECTED, str(exc))
@@ -297,6 +313,8 @@ def main(argv: list[str] | None = None) -> None:
                         print(f"{stamp()}  batch #{batch_id} written")
                     elif commands.state is BatchState.IDLE:
                         batch_id = None
+                    elif batch_id is not None:
+                        db.set_batch_state(conn, batch_id, commands.state.value)
                 last_state = commands.state
             for alarm in sorted(commands.alarms - last_alarms):
                 print(f"{stamp()}  *** ALARM {alarm} ***")

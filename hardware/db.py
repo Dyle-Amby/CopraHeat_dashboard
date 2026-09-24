@@ -182,6 +182,14 @@ def start_batch(conn: sqlite3.Connection, *, target_kg: float, state: str = "int
     return cur.lastrowid
 
 
+def set_batch_state(conn: sqlite3.Connection, batch_id: int, state: str) -> None:
+    """Keep a running batch's row on its current phase, so history and the
+    batch picker do not show 'intake' for a batch that is drying."""
+    conn.execute(
+        "UPDATE batches SET state = ? WHERE id = ? AND finished_at IS NULL", (state, batch_id)
+    )
+
+
 def mark_interrupted_batches(conn: sqlite3.Connection) -> int:
     """Called at supervisor startup. A batch row with no `finished_at` means the
     process died or was stopped mid-run; without this the dashboard would show a
@@ -318,6 +326,17 @@ def resolve_command(conn: sqlite3.Connection, command_id: int, status: str, resu
     )
 
 
+def expire_pending_commands(conn: sqlite3.Connection) -> int:
+    """Called at supervisor startup. Anything still pending was queued while no
+    supervisor was listening; running it now would fire an hours-old Start or
+    Abort at whatever the machine happens to be doing. Returns how many."""
+    cur = conn.execute(
+        "UPDATE commands SET status = ?, result = ?, resolved_at = ? WHERE status = ?",
+        (REJECTED, "expired: the supervisor was not running when this was sent", now_iso(), PENDING),
+    )
+    return cur.rowcount
+
+
 def command_status(conn: sqlite3.Connection, command_id: int) -> dict | None:
     """Flask polls this so a refused command shows the machine's own words."""
     row = conn.execute("SELECT * FROM commands WHERE id = ?", (command_id,)).fetchone()
@@ -353,9 +372,16 @@ def get_batch(conn: sqlite3.Connection, batch_id: int) -> dict | None:
     return _row_to_dict(row)
 
 
-def batch_samples(conn: sqlite3.Connection, batch_id: int, limit: int | None = None) -> list[dict]:
-    sql = "SELECT * FROM sensor_log WHERE batch_id = ? ORDER BY id"
+def batch_samples(
+    conn: sqlite3.Connection, batch_id: int, limit: int | None = None, after_id: int | None = None
+) -> list[dict]:
+    """`after_id` lets a live chart fetch only the rows it has not seen yet."""
+    sql = "SELECT * FROM sensor_log WHERE batch_id = ?"
     params: tuple = (batch_id,)
+    if after_id is not None:
+        sql += " AND id > ?"
+        params += (after_id,)
+    sql += " ORDER BY id"
     if limit is not None:
         sql += " LIMIT ?"
         params += (limit,)

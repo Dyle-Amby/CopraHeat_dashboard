@@ -21,10 +21,12 @@ Intake → Drying (closed-loop, static tray) → Sorting (vision-based grading)
 
 | Page | Description |
 |---|---|
-| **Dashboard** | Live overview of the current batch — drying phase, heater/fan state, sensor readings (temperature, humidity, weight loss), and the latest computer-vision grading result from the staging pocket |
-| **Sensor Logs** | Time-series charts for chamber temperature, ambient temperature, weight loss, humidity, and moisture loss — with per-metric peak, average, and minimum statistics |
-| **Batch History** | Table of completed drying batches with final moisture %, duration, and Great / Good / Bad copra counts; exportable as a file |
-| **Control Panel** | Manual overrides for heaters and fans, momentary actuator controls (hopper hatch, chamber trapdoor, staging pocket gate, diverter flap position), and an emergency stop that cuts all power and requires a physical reset |
+| **Dashboard** | Live overview polled every 2 s — phase track, heater/fan state, chamber and exhaust readings, exhaust absolute humidity (the drying endpoint signal), hopper weight vs. target, and active alarms |
+| **Sensor Logs** | Per-batch time-series charts for chamber temperature, exhaust temperature, exhaust RH, exhaust absolute humidity and hopper weight, with peak / average / lowest; a running batch refreshes itself |
+| **Batch History** | Every batch with start time, total and drying time, weight in / out, post-sort weight loss, grade counts and final status; CSV export |
+| **Control Panel** | Operator commands — start, end drying (manual endpoint), finish sorting, reset, abort with a reason, and the target batch weight. Each is checked by the machine and its answer shown. Disabled when the supervisor is not running |
+
+Every page header shows the supervisor heartbeat (online / stopped / not responding), and readings from a supervisor that is not running are dimmed as last-known values.
 
 ---
 
@@ -45,7 +47,7 @@ Intake → Drying (closed-loop, static tray) → Sorting (vision-based grading)
 
 ```
 CopraHeat_dashboard/
-├── app.py                  # Flask application & route definitions
+├── app.py                  # Flask pages + JSON API over hardware/db.py (never touches GPIO)
 ├── requirements.txt        # Python dependencies
 ├── hardware/
 │   ├── __init__.py
@@ -69,13 +71,17 @@ CopraHeat_dashboard/
 │   ├── css/
 │   │   └── style.css       # Custom design system & component styles
 │   └── js/
-│       └── dashboard.js    # Chart.js logic & interactive UI behaviour
+│       ├── common.js       # Shared: /api/live poller, header pill + alarm bell, sendCommand()
+│       ├── dashboard.js    # Dashboard page
+│       ├── sensor_logs.js  # Sensor Logs chart
+│       ├── batch_history.js# CSV export
+│       └── control_panel.js# Operator commands
 └── templates/
     ├── base.html           # Shared layout (sidebar nav, header, CDN links)
     ├── dashboard.html      # Live batch overview
     ├── sensor_logs.html    # Sensor time-series charts
-    ├── batch_history.html  # Completed batch records table
-    └── control_panel.html  # Manual override & emergency controls
+    ├── batch_history.html  # Batch records table
+    └── control_panel.html  # Operator commands
 ```
 
 ---
@@ -110,12 +116,25 @@ pip install -r requirements.txt
 ### Running the Server
 
 ```bash
-python app.py
+python app.py                 # FLASK_DEBUG=1 for the reloader/debugger — never on the Pi
 ```
+
+`CORDS_DB=<path>` points the dashboard at a different database (default `cords.db` next to `app.py`).
+
+### Demo without hardware
+
+Two terminals, same database:
+
+```bash
+python -m hardware.run_cords --simulate --speed 60 --interval 0.02   # the fake machine
+python app.py                                                          # the dashboard
+```
+
+Open `http://localhost:5000`, press **Start** on the Control Panel, and a whole batch runs in a few minutes.
 
 ### Running the Machine
 
-The supervisor owns every pin; the dashboard never touches GPIO.
+The supervisor owns every pin; the dashboard never touches GPIO. Only one supervisor may run per database — a second one refuses to start while the first's heartbeat is fresh.
 
 ```bash
 # whole batch against a fake machine, no hardware needed (minutes, not hours)
@@ -145,6 +164,17 @@ The server binds to `0.0.0.0:5000`, making the dashboard reachable from any devi
 | `/batch-history` | `batch_history()` | Batch History |
 | `/control-panel` | `control_panel()` | Control Panel |
 
+**JSON API** (what the pages poll; usable from any client on the LAN)
+
+| Method & route | Returns |
+|---|---|
+| `GET /api/live` | Machine snapshot + `supervisor` (`running` / `stopped` / `not_responding` / `never_run`) + the current `batch` row |
+| `GET /api/batches?limit=N` | Recent batches, newest first |
+| `GET /api/batches/<id>` | One batch |
+| `GET /api/batches/<id>/samples?after=<sample id>` | Its `sensor_log` rows; `after` returns only newer ones |
+| `POST /api/commands` `{"name", "payload"}` | `202` + the queued command. `400` for a bad name or payload, `409` if the supervisor is not running |
+| `GET /api/commands/<id>` | `pending`, then `done` / `rejected` with the machine's message |
+
 ---
 
 ## Configuration & Data
@@ -155,17 +185,15 @@ All state lives in a SQLite database (`cords.db`, created on first run, git-igno
 |---|---|---|
 | `machine_state` | supervisor | Single-row live snapshot, including a heartbeat so the UI can tell live data from a dead process |
 | `sensor_log` | supervisor | Time series behind the Sensor Logs charts |
-| `batches` | supervisor | One row per batch — inserted at start, updated at finish |
-| `commands` | Flask | Operator queue (`start`, `end_drying`, `abort`, `reset`, `set_target_kg`) with per-command results |
-| `settings` | Flask | Calibration: HX711 scale/offsets, servo angles, target weight |
+| `batches` | supervisor | One row per batch — inserted at start, follows the phase while running, completed at finish |
+| `commands` | Flask | Operator queue (`start`, `end_drying`, `finish_sorting`, `abort`, `reset`, `set_target_kg`) with per-command results |
+| `settings` | supervisor | Calibration (HX711 scale/offsets, servo angles) via `--save-settings`; target weight whenever the dashboard sets it |
 
-A rejected command keeps the machine's own words (`"cannot start from drying"`), so the dashboard can show why rather than failing silently.
+A rejected command keeps the machine's own words (`"cannot start from drying"`), so the dashboard can show why rather than failing silently. Commands are never left waiting for a supervisor that is not there: Flask refuses them with `409`, and anything still pending when a supervisor starts is expired rather than run late.
 
 There is no migration framework. `PRAGMA user_version` guards the schema; a mismatch asks you to move the file aside.
 
-**Not in `sensor_log`, deliberately:** there is no ambient column (the DHT22 sits by the exhaust, not outside), no live moisture column (moisture is not measured), and no live weight-loss column (weight loss is a post-sort figure on `batches`). The Dashboard and Sensor Logs pages still show all three as mockup values and need updating to match.
-
-`app.py` still serves a hardcoded `BATCHES` list — wiring it to these tables is the next step.
+**Not in `sensor_log`, deliberately:** there is no ambient column (the DHT22 sits by the exhaust, not outside), no live moisture column (moisture is not measured), and no live weight-loss column (weight loss is a post-sort figure on `batches`). The pages follow the schema: none of the three is shown as a live reading.
 
 ---
 
@@ -176,7 +204,7 @@ The dashboard is the operator interface for a custom copra processing machine, c
 - **Hopper** with an MG996R servo gate, held closed under load and opened when the hopper's HX711 load cell reads the target batch weight
 - **Conveyor** — heat-resistant stainless steel mesh belt, driven by a 57HS82 stepper via an HBS57H driver
 - **Drying chamber** — 3× 220 V ceramic IR heater bulbs switched by a Fotek SSR, with a 60–70 °C two-point hysteresis loop on a DS18B20 probe; 24 V intake/exhaust fans switched together via a Songle relay
-- **Ambient sensing** — DHT22 for ambient temperature and humidity
+- **Exhaust sensing** — DHT22 inside the chamber by the exhaust fan; its absolute humidity is the drying endpoint signal (there is no ambient sensor)
 - **Computer-vision module** — Camera Module 3 + MobileNetV3Small (`cords_model.tflite`) grading each piece as *Great*, *Good*, or *Bad*
 - **Bin carriage** — 57BYGH420 stepper via a TB6600 driver, moving vertically between three bin heights; three normally-closed limit switches act as hard position stops
 - **Bin load cells** — one HX711 per output bin; target weight loss during drying is ~43–47% (≈50% → ≤6% moisture)
@@ -220,9 +248,10 @@ Free: GPIO25 (pin 22). Reserved: GPIO2/3 (I²C), GPIO14/15 (UART), GPIO19 (kept 
 
 ## Development Notes
 
-- `debug=True` is set in `app.run()` for development. **Disable this before deploying to production.**
+- Debug is off unless `FLASK_DEBUG=1`: the Werkzeug debugger executes arbitrary code for anyone who can reach port 5000, and the server binds to the whole LAN.
+- The Control Panel has **no authentication yet**. Anyone on the network can start or abort a batch — add a login before the machine is on a shared network.
+- The web Abort is a software stop, not an emergency stop. An e-stop must cut heater and motor power in hardware, independent of the Pi.
 - The sidebar navigation highlights the active page using Jinja2 `active_page` context variables passed from each route.
-- The Control Panel includes a prominent warning banner — manual overrides should only be used during maintenance and testing, not during automated drying cycles.
 
 ---
 
