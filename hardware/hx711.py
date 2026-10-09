@@ -12,6 +12,8 @@ should treat None as "retry", not "fault", unless it persists.
 import statistics
 import time
 
+from hardware.gpiochip import open_rp1_chip
+
 SATURATED = {0x7FFFFF, 0x800000}
 
 
@@ -23,32 +25,20 @@ def decode_24bit(raw: int) -> int | None:
     return raw - (1 << 24) if raw & 0x800000 else raw
 
 
-def _open_rp1_chip():
-    import lgpio
-
-    # The Pi 5 header lives on the RP1 chip: gpiochip4 on older kernels, gpiochip0 on newer ones.
-    for chip in (4, 0):
-        try:
-            handle = lgpio.gpiochip_open(chip)
-        except lgpio.error:
-            continue
-        _, _, label = lgpio.gpio_get_chip_info(handle)
-        if "rp1" in label.lower():
-            return handle
-        lgpio.gpiochip_close(handle)
-    raise RuntimeError("no RP1 gpiochip found; is this a Pi 5?")
-
-
 class HX711:
     def __init__(self, dout: int, sck: int, offset: int = 0, scale: float = 1.0):
         import lgpio
 
         self._lgpio = lgpio
-        self._h = _open_rp1_chip()
+        self._h = open_rp1_chip()
         self.dout = dout
         self.sck = sck
         self.offset = offset      # raw counts at zero load
         self.scale = scale        # raw counts per kg
+        # why the last read_raw() returned None: "timeout" = DOUT never went low
+        # (power, DOUT or SCK wiring); "railed" = ADC pinned at full scale (the
+        # load-cell side: E+/E-/A+/A- open or swapped)
+        self.last_fault: str | None = None
         lgpio.gpio_claim_input(self._h, dout)
         lgpio.gpio_claim_output(self._h, sck, 0)
 
@@ -57,6 +47,7 @@ class HX711:
         deadline = time.monotonic() + timeout_s
         while g.gpio_read(self._h, self.dout):        # DOUT high = conversion not ready
             if time.monotonic() > deadline:
+                self.last_fault = "timeout"
                 return None
             time.sleep(0.001)
         value = 0
@@ -66,7 +57,9 @@ class HX711:
             value = (value << 1) | g.gpio_read(self._h, self.dout)
         g.gpio_write(self._h, self.sck, 1)             # 25th pulse: channel A, gain 128 next time
         g.gpio_write(self._h, self.sck, 0)
-        return decode_24bit(value)
+        decoded = decode_24bit(value)
+        self.last_fault = "railed" if decoded is None else None
+        return decoded
 
     def read_raw_median(self, samples: int = 15) -> int | None:
         readings = [r for r in (self.read_raw() for _ in range(samples)) if r is not None]
