@@ -11,6 +11,10 @@ venv/
 *.sqlite
 *.sqlite3
 *.db
+# SQLite WAL-mode side files (cords.db runs in WAL mode)
+*.db-wal
+*.db-shm
+*.db-journal
 *.log
 
 # Editors / OS
