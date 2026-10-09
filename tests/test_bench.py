@@ -24,6 +24,9 @@ class BenchCliTest(unittest.TestCase):
         # the hopper needs two tare offsets; run_hopper --calibrate owns that
         self.parse_fails(["scale-cal", "hopper"])
 
+    def test_sort_rejects_unknown_switch_in_order(self):
+        self.parse_fails(["sort", "--order", "LS1", "LS2", "LS9"])
+
     def test_subcommand_required(self):
         self.parse_fails([])
 

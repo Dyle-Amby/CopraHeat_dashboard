@@ -9,6 +9,8 @@ inside CopraHeat_dashboard, with run_cords stopped (it owns the same pins):
     python -m hardware.bench jog conveyor --steps 400    # exact step count, then stop
     python -m hardware.bench jog carriage --steps 2000 --reverse
                                                          # stops early on any limit switch
+    python -m hardware.bench sort                        # type great / good / bad, carriage goes there
+    python -m hardware.bench sort great bad good         # or run a fixed sequence
 
 Start slow (the default --hz 400) and raise it once direction and wiring are
 confirmed. The hopper cell's calibration lives in run_hopper --calibrate, since
@@ -22,7 +24,7 @@ import time
 from collections import deque
 from datetime import datetime
 
-from hardware import pins
+from hardware import carriage, pins
 from hardware.limits import SWITCHES, newly_triggered
 from hardware.stepper import steps_done
 
@@ -123,6 +125,92 @@ def jog(args: argparse.Namespace) -> None:
         print(f"{stamp()}  STOPPED by {reason} after ~{sent} steps (estimated from time)")
 
 
+def carriage_move(stepper, ls, target: str | None, up: bool, limit: int,
+                  args: argparse.Namespace) -> tuple[str, int]:
+    """Run the carriage until MoveWatch says it arrived; returns (switch it is on, steps sent)."""
+    watch = carriage.MoveWatch(ls.read(), target, args.order, args.release_within)
+    t0 = time.monotonic()
+    status, detail = carriage.MOVING, None
+    stepper.start(limit, args.hz, forward=up)
+    try:
+        # also wait out a short grace period in case tx_busy lags the start
+        while stepper.busy or time.monotonic() - t0 < 0.1:
+            status, detail = watch.update(ls.read(), steps_done(time.monotonic() - t0, args.hz, limit))
+            if status != carriage.MOVING:
+                break
+            time.sleep(0.0005)
+    finally:
+        sent = stepper.stop()
+    if status == carriage.ARRIVED:
+        print(f"{stamp()}    at {detail} after ~{sent} steps {'up' if up else 'down'}")
+        return detail, sent
+    if status == carriage.FAULT:
+        raise RuntimeError(detail)
+    raise RuntimeError(f"no limit switch within {limit} steps: the carriage left an end stop the wrong way "
+                       "(--up-reverse), stalled, or a switch is not wired (check with `bench limits`)")
+
+
+def sort(args: argparse.Namespace) -> None:
+    from hardware.limits import LimitSwitches
+    from hardware.stepper import Stepper
+
+    grade_stop = carriage.stops(args.order, args.bins)
+    print("bins bottom -> top: " + ", ".join(f"{b} @ {s}" for b, s in zip(args.bins, args.order))
+          + f"  (up = {'reverse' if args.up_reverse else 'forward'})")
+
+    ls = LimitSwitches()
+    stepper = Stepper(pins.TB6600_CARRIAGE, invert_dir=args.up_reverse)
+    try:
+        # steps between each pair of stops, learned per pair because the bins are
+        # asymmetric; until a pair has been travelled once, only --max-steps caps a
+        # move that went the wrong way past an end stop
+        travel: dict[frozenset, int] = {}
+        here = carriage.located_at(ls.read())
+        if here is None:
+            print(f"{stamp()}  carriage between stops: homing down to the nearest switch")
+            here, _ = carriage_move(stepper, ls, None, False, args.max_steps, args)
+        else:
+            print(f"{stamp()}  carriage resting at {here}")
+
+        grades = iter(args.grades) if args.grades else _prompt_grades(grade_stop)
+        for grade in grades:
+            grade = grade.lower()
+            if grade not in grade_stop:
+                print(f"  unknown grade {grade!r}; use one of {', '.join(grade_stop)}")
+                continue
+            target = grade_stop[grade]
+            if target == here:
+                print(f"{stamp()}  {grade} -> {target}: already there")
+            else:
+                pair = frozenset((here, target))
+                limit = args.max_steps
+                if pair in travel:
+                    limit = min(limit, int(travel[pair] * 1.5) + args.release_within)
+                print(f"{stamp()}  {grade} -> {target}")
+                up = carriage.moving_up(here, target, args.order)
+                here, sent = carriage_move(stepper, ls, target, up, limit, args)
+                travel[pair] = max(travel.get(pair, 0), sent)
+            if args.grades:
+                time.sleep(args.pause)
+    except RuntimeError as exc:
+        sys.exit(f"{stamp()}  STOPPED: {exc}")
+    finally:
+        stepper.close()
+        ls.close()
+
+
+def _prompt_grades(grade_stop: dict[str, str]):
+    while True:
+        try:
+            line = input(f"grade ({' / '.join(grade_stop)}, q to quit)> ").strip().lower()
+        except EOFError:
+            return
+        if line in ("q", "quit", "exit"):
+            return
+        if line:
+            yield line
+
+
 def watch_scales(args: argparse.Namespace) -> None:
     from hardware.hx711 import HX711
 
@@ -192,6 +280,20 @@ def main(argv: list[str] | None = None) -> None:
                    help="with --from-switch: stop if the start switch is still pressed after this many steps")
     j.add_argument("--ignore-limits", action="store_true", help="carriage only: no limit-switch guard")
     j.set_defaults(func=jog)
+
+    o = sub.add_parser("sort", help="send the carriage to a grade's bin")
+    o.add_argument("grades", nargs="*", help="sequence to run; omit to type grades one by one")
+    o.add_argument("--hz", type=float, default=400.0, help="steps per second")
+    o.add_argument("--max-steps", type=int, default=20000, help="give up if no switch within this many steps")
+    o.add_argument("--up-reverse", action="store_true", help="the motor's reverse direction raises the carriage")
+    o.add_argument("--order", nargs=3, choices=SWITCHES, default=list(carriage.ORDER), metavar="LS",
+                   help="limit switches bottom to top (default: LS1 LS2 LS3)")
+    o.add_argument("--bins", nargs=3, default=list(carriage.BINS), metavar="GRADE",
+                   help="grade of the bin at each of those stops (default: great good bad)")
+    o.add_argument("--release-within", type=int, default=400,
+                   help="fault if the start switch is still pressed after this many steps")
+    o.add_argument("--pause", type=float, default=1.0, help="seconds at each bin in a sequence")
+    o.set_defaults(func=sort)
 
     s = sub.add_parser("scales", help="raw readings from the HX711s")
     s.add_argument("--cells", nargs="+", choices=CELLS)

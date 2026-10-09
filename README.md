@@ -160,7 +160,16 @@ python -m hardware.bench scales                    # all 4 HX711s, raw counts + 
 python -m hardware.bench scale-cal great           # tare + scale one bin cell (great/good/bad)
 python -m hardware.bench jog conveyor --steps 400  # exact step count at --hz (default 400)
 python -m hardware.bench jog carriage --steps 2000 # stops early on any limit switch
+python -m hardware.bench sort                      # type great / good / bad: carriage goes to that bin
+python -m hardware.bench sort great bad good       # or run a fixed sequence
 ```
+
+`sort` finds the carriage first: resting on a switch, or homing down to the nearest one. Defaults are
+placeholders until confirmed on the machine: switches bottom → top `--order LS1 LS2 LS3`, bins at
+those stops `--bins great good bad`, and forward = up (`--up-reverse` flips it). Set `--max-steps`
+to a little over the full carriage travel (measure it with `jog`): it is the only cap on the very
+first move if the motor turns out to be wired backwards. After that, each pair of stops gets a cap
+learned from its own first trip.
 
 The carriage jog refuses to start on a pressed switch unless `--from-switch` is given, and stops if
 that switch never releases (driving into the stop). Run `scales` while a stepper jogs to check
