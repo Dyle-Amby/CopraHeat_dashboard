@@ -56,14 +56,18 @@ CopraHeat_dashboard/
 │   ├── hopper.py           # Hopper gate state machine + stable-weight filter (no GPIO; unit-tested)
 │   ├── drying.py           # Drying endpoint from exhaust absolute humidity (no GPIO; unit-tested)
 │   ├── sensors.py          # DS18B20 / DHT22 readers via kernel sysfs
+│   ├── gpiochip.py         # Opens the Pi 5's RP1 GPIO chip for lgpio users
 │   ├── hx711.py            # HX711 load-cell driver, bit-banged through lgpio
+│   ├── stepper.py          # TB6600 / HBS57H step+dir driver (lgpio tx_pulse)
+│   ├── limits.py           # Bin-carriage limit switches (NC, internal pull-ups)
 │   ├── servo.py            # MG996R on hardware PWM (rpi-hardware-pwm)
 │   ├── db.py               # SQLite data layer; also the Flask ↔ supervisor IPC
 │   ├── conveyor.py         # Conveyor interface; simulated until the stepper driver lands
 │   ├── simulate.py         # Fake machine for --simulate runs (test fixture, not production)
 │   ├── run_cords.py        # Supervisor: the one process that owns every pin
 │   ├── run_climate.py      # Bench loop: sensors → controllers → SSR / fan relay
-│   └── run_hopper.py       # Bench loop + --calibrate: HX711 → gate logic → servo
+│   ├── run_hopper.py       # Bench loop + --calibrate: HX711 → gate logic → servo
+│   └── bench.py            # Wiring checks: steppers, limit switches, all 4 scales
 ├── tests/                  # python -m unittest discover -s tests
 ├── static/
 │   ├── css/
@@ -126,6 +130,22 @@ python -m hardware.run_cords --start --scale 21500 --offset-closed 84210 --offse
 ```
 
 `run_climate.py` and `run_hopper.py` remain for single-subsystem bench work.
+
+### Bench-testing the sorting-side wiring
+
+Stop `run_cords` first: it holds the same pins.
+
+```bash
+python -m hardware.bench limits                    # press / unplug each switch: must read HIGH
+python -m hardware.bench scales                    # all 4 HX711s, raw counts + noise spread
+python -m hardware.bench scale-cal great           # tare + scale one bin cell (great/good/bad)
+python -m hardware.bench jog conveyor --steps 400  # exact step count at --hz (default 400)
+python -m hardware.bench jog carriage --steps 2000 # stops early on any limit switch
+```
+
+The carriage jog refuses to start on a pressed switch unless `--from-switch` is given, and stops if
+that switch never releases (driving into the stop). Run `scales` while a stepper jogs to check
+whether motor wiring disturbs the long load-cell leads.
 
 The server binds to `0.0.0.0:5000`, making the dashboard reachable from any device on the same network:
 
