@@ -111,6 +111,19 @@ class TestBatches(DBCase):
         self.assertEqual(db.get_batch(self.conn, batch_id)["state"], "complete")
 
 
+class TestBatchState(DBCase):
+    def test_a_running_batch_follows_its_phase(self):
+        batch_id = db.start_batch(self.conn, target_kg=2.0)
+        db.set_batch_state(self.conn, batch_id, "drying")
+        self.assertEqual(db.get_batch(self.conn, batch_id)["state"], "drying")
+
+    def test_a_finished_batch_keeps_its_final_state(self):
+        batch_id = db.start_batch(self.conn, target_kg=2.0)
+        db.finish_batch(self.conn, batch_id, RECORD, "complete")
+        db.set_batch_state(self.conn, batch_id, "drying")
+        self.assertEqual(db.get_batch(self.conn, batch_id)["state"], "complete")
+
+
 class TestSensorLog(DBCase):
     def test_samples_come_back_in_order_for_their_batch(self):
         one = db.start_batch(self.conn, target_kg=2.0)
@@ -121,6 +134,14 @@ class TestSensorLog(DBCase):
 
         samples = db.batch_samples(self.conn, one)
         self.assertEqual([s["chamber_c"] for s in samples], [60.0, 65.0, 70.0])
+
+    def test_after_id_returns_only_newer_rows(self):
+        batch_id = db.start_batch(self.conn, target_kg=2.0)
+        for temp in (60.0, 65.0, 70.0):
+            db.log_sample(self.conn, batch_id=batch_id, state="drying", chamber_c=temp)
+        first = db.batch_samples(self.conn, batch_id)[0]["id"]
+        newer = db.batch_samples(self.conn, batch_id, after_id=first)
+        self.assertEqual([s["chamber_c"] for s in newer], [65.0, 70.0])
 
     def test_idle_samples_have_no_batch(self):
         db.log_sample(self.conn, batch_id=None, state="idle", chamber_c=30.0)
@@ -213,6 +234,18 @@ class TestCommands(DBCase):
         command_id = db.queue_command(self.conn, "start")
         with self.assertRaises(ValueError):
             db.resolve_command(self.conn, command_id, "maybe")
+
+    def test_commands_left_pending_expire_rather_than_run_late(self):
+        stale = db.queue_command(self.conn, "start")
+        answered = db.queue_command(self.conn, "abort")
+        db.resolve_command(self.conn, answered, db.REJECTED, "no batch to abort")
+        self.assertEqual(db.expire_pending_commands(self.conn), 1)
+        self.assertEqual(db.pending_commands(self.conn), [])
+        row = db.command_status(self.conn, stale)
+        self.assertEqual(row["status"], db.REJECTED)
+        self.assertIn("expired", row["result"])
+        # an already-answered command keeps its own answer
+        self.assertEqual(db.command_status(self.conn, answered)["result"], "no batch to abort")
 
     def test_payloads_survive_the_round_trip(self):
         command_id = db.queue_command(self.conn, "set_target_kg", "3.5")

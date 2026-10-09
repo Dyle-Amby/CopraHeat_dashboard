@@ -5,20 +5,25 @@
 {% block content %}
 
 <!-- phase track -->
-<div class="phase-track mb-4">
-  <div class="phase-node">
-    <div class="phase-dot done"></div>
-    <span style="font-size:0.75rem; color:var(--muted);">Intake</span>
-  </div>
-  <div class="phase-line"></div>
-  <div class="phase-node">
-    <div class="phase-dot current"></div>
-    <span style="font-size:0.75rem; font-weight:600;">Drying</span>
-  </div>
-  <div class="phase-line"></div>
-  <div class="phase-node">
+<div class="phase-track mb-4" id="phaseTrack">
+  <div class="phase-node" data-phase="intake">
     <div class="phase-dot"></div>
-    <span style="font-size:0.75rem; color:var(--muted);">Sorting</span>
+    <span class="phase-name">Intake</span>
+  </div>
+  <div class="phase-line"></div>
+  <div class="phase-node" data-phase="drying">
+    <div class="phase-dot"></div>
+    <span class="phase-name">Drying</span>
+  </div>
+  <div class="phase-line"></div>
+  <div class="phase-node" data-phase="cooldown">
+    <div class="phase-dot"></div>
+    <span class="phase-name">Cooldown</span>
+  </div>
+  <div class="phase-line"></div>
+  <div class="phase-node" data-phase="sorting">
+    <div class="phase-dot"></div>
+    <span class="phase-name">Sorting</span>
   </div>
 </div>
 
@@ -28,21 +33,22 @@
       <div class="row">
         <div class="col-4">
           <p class="stat-label mb-1">Current phase</p>
-          <p class="stat-value" style="font-size:1.3rem;">Drying</p>
-          <p class="stat-label mb-0" style="font-size:0.72rem;">Static tray, closed-loop</p>
+          <p class="stat-value live-value" style="font-size:1.3rem;" id="phaseValue">&mdash;</p>
+          <p class="stat-label mb-0" style="font-size:0.72rem;" id="phaseNote">&nbsp;</p>
         </div>
         <div class="col-4 stat-row">
           <i class="bi bi-thermometer-sun stat-icon"></i>
           <div>
             <p class="stat-label">Heaters</p>
-            <p class="stat-value">On</p>
+            <p class="stat-value live-value" id="heaterValue">&mdash;</p>
           </div>
         </div>
         <div class="col-4 stat-row">
           <i class="bi bi-fan stat-icon"></i>
           <div>
             <p class="stat-label">Fans</p>
-            <p class="stat-value" style="color:var(--muted);">Idle</p>
+            <p class="stat-value live-value" id="fanValue">&mdash;</p>
+            <p class="stat-label mb-0" style="font-size:0.72rem;" id="fanNote">&nbsp;</p>
           </div>
         </div>
       </div>
@@ -51,51 +57,60 @@
   <div class="col-lg-4">
     <div class="card-panel h-100">
       <p class="stat-label mb-1">Batch no.</p>
-      <p class="stat-value mb-3">10</p>
-      <p class="stat-label mb-1">Date</p>
-      <p class="stat-value mb-3" style="font-size:1rem;">Aug 21, 2026, Fri</p>
+      <p class="stat-value mb-3 live-value" id="batchNo">&mdash;</p>
+      <p class="stat-label mb-1">Started</p>
+      <p class="stat-value mb-3 live-value" style="font-size:1rem;" id="batchStarted">&mdash;</p>
       <p class="stat-label mb-1">Time elapsed</p>
-      <p class="stat-value" style="font-size:1rem;">2h 10m 47s</p>
+      <p class="stat-value live-value" style="font-size:1rem;" id="batchElapsed">&mdash;</p>
     </div>
   </div>
 </div>
 
-<div class="row g-4">
+<div class="row g-4 mb-4">
   <div class="col-lg-7">
     <div class="card-panel h-100">
-      <h6 class="card-eyebrow">Recent sensor readings</h6>
+      <h6 class="card-eyebrow">Live sensor readings</h6>
 
       <div class="reading-row">
         <div class="label">Chamber temperature</div>
-        <div><span class="value">62&deg;C</span><span class="note">Within 60&ndash;70&deg;C threshold</span></div>
+        <div><span class="value live-value" id="chamberValue">&mdash;</span><span class="note" id="chamberNote"></span></div>
       </div>
       <hr class="hairline">
       <div class="reading-row">
-        <div class="label">Humidity level</div>
-        <div><span class="value">44%</span><span class="note">Fans set to idle</span></div>
+        <div class="label">Exhaust air</div>
+        <div><span class="value live-value" id="exhaustValue">&mdash;</span><span class="note" id="exhaustNote"></span></div>
       </div>
       <hr class="hairline">
       <div class="reading-row">
-        <div class="label">Weight loss</div>
-        <div><span class="value">18%</span><span class="note">Target &asymp;46% (gravimetric, 50%&rarr;6% moisture)</span></div>
+        <div class="label">Exhaust absolute humidity</div>
+        <div><span class="value live-value" id="ahValue">&mdash;</span><span class="note">Drying endpoint signal &mdash; ends when it falls off its peak and flattens</span></div>
+      </div>
+      <hr class="hairline">
+      <div class="reading-row">
+        <div class="label">Hopper weight</div>
+        <div><span class="value live-value" id="hopperValue">&mdash;</span><span class="note" id="hopperNote"></span></div>
       </div>
     </div>
   </div>
 
   <div class="col-lg-5">
-    <div class="card-panel h-100 text-center">
-      <h6 class="card-eyebrow text-start">Recent vision result &middot; staging pocket</h6>
-      <div class="vision-thumb"><i class="bi bi-image"></i></div>
-      <div class="d-flex justify-content-between align-items-center px-2 mb-3">
-        <span style="font-size:0.85rem; color:var(--muted);">Confidence rating</span>
-        <span class="stat-value">94%</span>
-      </div>
-      <div class="text-start px-2">
-        <div class="tally-row"><span>Great</span><span class="tally-great">19</span></div>
-        <div class="tally-row"><span>Good</span><span class="tally-okay">9</span></div>
-        <div class="tally-row"><span>Bad</span><span class="tally-bad">4</span></div>
-      </div>
+    <div class="card-panel h-100" id="alarms">
+      <h6 class="card-eyebrow">Alarms</h6>
+      <ul class="alarm-list" id="alarmList">
+        <li class="alarm-none">No active alarms</li>
+      </ul>
+      <hr class="hairline my-3">
+      <h6 class="card-eyebrow">Sorting results</h6>
+      <p class="stat-label mb-2" id="sortNote">Vision grading is not connected yet; counts appear here once the sorter reports them.</p>
+      <div class="tally-row"><span>Great</span><span class="tally-great" id="tallyGreat">&mdash;</span></div>
+      <div class="tally-row"><span>Good</span><span class="tally-okay" id="tallyGood">&mdash;</span></div>
+      <div class="tally-row"><span>Bad</span><span class="tally-bad" id="tallyBad">&mdash;</span></div>
+      <p class="stat-label mt-3 mb-0">Weight loss is worked out after sorting (hopper in vs. bins out) and recorded in <a href="{{ url_for('batch_history') }}">Batch history</a>.</p>
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
 {% endblock %}

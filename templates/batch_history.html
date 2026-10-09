@@ -4,34 +4,51 @@
 
 {% block content %}
 <div class="card-panel">
+  <div class="table-responsive">
   <table class="history-table" id="historyTable">
     <thead>
       <tr>
         <th>Batch no.</th>
-        <th>Date</th>
-        <th>Time elapsed</th>
-        <th>Final moisture %</th>
+        <th>Started</th>
+        <th>Total time</th>
+        <th>Drying time</th>
+        <th>Weight in</th>
+        <th>Weight out</th>
+        <th>Weight loss</th>
         <th>Great</th>
         <th>Good</th>
         <th>Bad</th>
+        <th>Status</th>
       </tr>
     </thead>
     <tbody>
       {% for batch in batches %}
       <tr>
-        <td>{{ batch.id }}</td>
-        <td>{{ batch.date }}</td>
-        <td>{{ batch.duration }}</td>
-        <td>{{ batch.moisture }}</td>
-        <td><span class="ratio-great">{{ batch.great }}</span></td>
-        <td><span class="ratio-okay">{{ batch.good }}</span></td>
-        <td><span class="ratio-bad">{{ batch.bad }}</span></td>
+        <td><a href="{{ url_for('sensor_logs', batch=batch.id) }}" title="Sensor logs for this batch">{{ batch.id }}</a></td>
+        <td>{{ batch.started_at | date }}</td>
+        <td>{{ batch.duration_s | duration }}</td>
+        <td>{{ batch.drying_s | duration }}</td>
+        <td>{{ batch.weight_in_kg | num(2, ' kg') }}</td>
+        <td>{{ batch.weight_out_kg | num(2, ' kg') }}</td>
+        <td>{{ batch.weight_loss_pct | num(1, '%') }}</td>
+        <td><span class="ratio-great">{{ batch.great if batch.great is not none else '—' }}</span></td>
+        <td><span class="ratio-okay">{{ batch.good if batch.good is not none else '—' }}</span></td>
+        <td><span class="ratio-bad">{{ batch.bad if batch.bad is not none else '—' }}</span></td>
+        <td><span class="state-badge" data-state="{{ batch.state }}" {% if batch.abort_reason %}title="{{ batch.abort_reason }}"{% endif %}>{{ batch.state }}</span></td>
       </tr>
+      {% else %}
+      <tr><td colspan="11" style="color:var(--muted);">No batches recorded yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>
-  <div class="d-flex justify-content-end mt-4">
-    <button class="btn-outline-ink" id="exportBtn"><i class="bi bi-download me-2"></i>Export history</button>
+  </div>
+  <div class="d-flex justify-content-between align-items-center mt-4">
+    <p class="stat-label mb-0">Weight loss = hopper-in vs. the three bins after sorting. Grade counts appear once vision grading is connected.</p>
+    <button class="btn-outline-ink" id="exportBtn" {{ 'disabled' if not batches else '' }}><i class="bi bi-download me-2"></i>Export history</button>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/batch_history.js') }}"></script>
 {% endblock %}
