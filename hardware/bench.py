@@ -1,8 +1,11 @@
-"""Bench checks for the sorting-side wiring: steppers, limit switches, scales.
+"""Bench checks for the machine wiring: relays, sensors, steppers, limit switches, scales.
 
 Meant for testing the harness before it is fixed in place. Run on the Pi from
 inside CopraHeat_dashboard, with run_cords stopped (it owns the same pins):
 
+    python -m hardware.bench relay fan                   # type on / off, the fan relay follows
+    python -m hardware.bench relay heater                # same for the heater SSR (mains!)
+    python -m hardware.bench sensors                     # live DS18B20 + DHT22 readings
     python -m hardware.bench limits                      # watch the 3 limit switches
     python -m hardware.bench scales                      # raw readings from all 4 HX711s
     python -m hardware.bench scale-cal great             # tare + scale for one bin cell
@@ -33,6 +36,11 @@ MOTORS = {
     "carriage": pins.TB6600_CARRIAGE,
 }
 
+RELAYS = {
+    "fan": pins.FAN_RELAY,
+    "heater": pins.HEATER_SSR,
+}
+
 CELLS = {
     "hopper": pins.HX711_HOPPER,
     "great": pins.HX711_BIN_GREAT,
@@ -47,6 +55,53 @@ def stamp() -> str:
 
 def show_switches(state: dict[str, bool]) -> str:
     return "  ".join(f"{name}={'HIGH (pressed / wire open)' if hit else 'low'}" for name, hit in state.items())
+
+
+def relay(args: argparse.Namespace) -> None:
+    from gpiozero import OutputDevice
+
+    gpio = RELAYS[args.name]
+    if args.name == "heater":
+        print("HEATER: this switches 220 V bulbs. Keep hands off the chamber.")
+    # active_high=False: 'on' drives the pin LOW, for low-level-trigger relay boards
+    out = OutputDevice(gpio, active_high=not args.active_low, initial_value=False)
+    print(f"{args.name} on GPIO{gpio}{' (active-low)' if args.active_low else ''}, starting OFF. "
+          "Type on / off (q to quit).")
+    print("No click on 'on'? Measure GPIO -> GND (expect ~3.3 V), then the relay/SSR input side.")
+    try:
+        while True:
+            try:
+                line = input(f"{args.name}> ").strip().lower()
+            except EOFError:
+                break
+            if line in ("q", "quit", "exit"):
+                break
+            if line in ("on", "1"):
+                out.on()
+            elif line in ("off", "0"):
+                out.off()
+            elif line:
+                print("  on / off / q")
+                continue
+            level = bool(out.value) != args.active_low
+            print(f"{stamp()}  {args.name} {'ON' if out.value else 'off'}  (GPIO{gpio} {'HIGH' if level else 'low'})")
+    finally:
+        out.off()
+        out.close()
+        print(f"{args.name} OFF")
+
+
+def watch_sensors(args: argparse.Namespace) -> None:
+    from hardware import sensors
+
+    print("chamber = DS18B20 (GPIO4), exhaust = DHT22 (GPIO26). '--' = no reading.")
+    print("DS18B20 '--': w1-gpio overlay / 4.7k pull-up. DHT22 '--': dht11 overlay / wiring.")
+    while True:
+        chamber = sensors.read_ds18b20()
+        t, rh = sensors.read_dht22()
+        show = lambda v, unit: "--" if v is None else f"{v:.1f}{unit}"
+        print(f"{stamp()}  chamber={show(chamber, 'C'):>7}  exhaust={show(t, 'C'):>7} {show(rh, '%'):>6}")
+        time.sleep(args.interval)
 
 
 def watch_limits(args: argparse.Namespace) -> None:
@@ -265,6 +320,15 @@ def calibrate_scale(args: argparse.Namespace) -> None:
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="command", required=True)
+
+    r = sub.add_parser("relay", help="switch the fan relay or heater SSR by hand")
+    r.add_argument("name", choices=RELAYS)
+    r.add_argument("--active-low", action="store_true", help="relay board turns ON when its IN pin is LOW")
+    r.set_defaults(func=relay)
+
+    n = sub.add_parser("sensors", help="live chamber and exhaust readings")
+    n.add_argument("--interval", type=float, default=2.0, help="seconds between readings (DHT22 minimum is 2)")
+    n.set_defaults(func=watch_sensors)
 
     sub.add_parser("limits", help="watch the three limit switches").set_defaults(func=watch_limits)
 

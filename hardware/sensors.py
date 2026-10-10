@@ -41,10 +41,15 @@ def read_ds18b20() -> float | None:
         return None
 
 
+def is_dht_name(name: str) -> bool:
+    # newer kernels append the device-tree node address: "dht11@1a" on the Pi 5
+    return name.strip().split("@")[0] == "dht11"
+
+
 def _find_dht() -> Path | None:
     for device in IIO_DEVICES.glob("iio:device*"):
         try:
-            if (device / "name").read_text().strip() == "dht11":
+            if is_dht_name((device / "name").read_text()):
                 return device
         except OSError:
             continue

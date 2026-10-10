@@ -15,7 +15,9 @@ def open_rp1_chip() -> int:
             handle = lgpio.gpiochip_open(chip)
         except lgpio.error:
             continue
-        _, _, label = lgpio.gpio_get_chip_info(handle)
+        # (status, lines, name, label); take the label from the end so the
+        # tuple's exact length cannot break this again
+        label = str(lgpio.gpio_get_chip_info(handle)[-1])
         if "rp1" in label.lower():
             return handle
         lgpio.gpiochip_close(handle)

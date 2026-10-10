@@ -14,6 +14,12 @@ class BenchCliTest(unittest.TestCase):
         self.assertEqual(bench.MOTORS["conveyor"], pins.HBS57H_CONVEYOR)
         self.assertEqual(bench.MOTORS["carriage"], pins.TB6600_CARRIAGE)
 
+    def test_relay_pins_match_pin_map(self):
+        self.assertEqual(bench.RELAYS, {"fan": pins.FAN_RELAY, "heater": pins.HEATER_SSR})
+
+    def test_unknown_relay_rejected(self):
+        self.parse_fails(["relay", "servo"])
+
     def test_all_four_cells_present(self):
         self.assertEqual(set(bench.CELLS), {"hopper", "great", "good", "bad"})
 

@@ -51,9 +51,11 @@ LIMIT_SWITCH_3 = 21  # phys 40
 # Both lines have a 10k pull-down on the interface board so they cannot fire
 # while the GPIO is floating during boot, reset, or a crashed control process.
 HEATER_SSR = 5  # phys 29 - Fotek SSR, 3x 220V IR bulbs; pull-down GPIO -> GND
-FAN_RELAY = 6   # phys 31 - Songle relay via 2N2222; pull-down on transistor base
+FAN_RELAY = 25  # phys 22 - Tongling relay via 2N2222; pull-down on transistor base
+                # (moved off GPIO6 / phys 31, whose output died on 2026-10-10)
 
-# GPIO25 (phys 22) is the only free GPIO left.
+# No free GPIO left: GPIO25 (phys 22), the last spare, now drives the fan relay.
+# GPIO6 (phys 31) is DEAD on this Pi (output stage, found 2026-10-10) - never assign it.
 # GPIO2/3 (I2C), GPIO14/15 (UART) reserved. GPIO0/1 are HAT EEPROM, never use.
 
 
@@ -67,3 +69,4 @@ _ASSIGNED = [
 ]
 assert len(_ASSIGNED) == len(set(_ASSIGNED)), "duplicate GPIO assignment in pins.py"
 assert 19 not in _ASSIGNED, "GPIO19 is reserved for the servo's hardware PWM pair"
+assert 6 not in _ASSIGNED, "GPIO6 (phys 31) has a dead output on this Pi"

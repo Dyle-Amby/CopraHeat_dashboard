@@ -1,6 +1,14 @@
 import unittest
 
-from hardware.sensors import parse_milli, parse_w1_slave, read_dht22, read_ds18b20
+from hardware.sensors import (
+    IIO_DEVICES,
+    W1_DEVICES,
+    is_dht_name,
+    parse_milli,
+    parse_w1_slave,
+    read_dht22,
+    read_ds18b20,
+)
 
 GOOD = "72 01 4b 46 7f ff 0e 10 57 : crc=57 YES\n72 01 4b 46 7f ff 0e 10 57 t=23125\n"
 CRC_FAIL = "ff ff ff ff ff ff ff ff ff : crc=c9 NO\nff ff ff ff ff ff ff ff ff t=-62"
@@ -41,12 +49,27 @@ class MilliParserTest(unittest.TestCase):
         self.assertIsNone(parse_milli("nan"))
 
 
+class DhtNameTest(unittest.TestCase):
+    def test_plain_name(self):
+        self.assertTrue(is_dht_name("dht11\n"))
+
+    def test_pi5_name_with_node_address(self):
+        # what the Pi 5 kernel actually reports (seen on the machine 2026-10-10)
+        self.assertTrue(is_dht_name("dht11@1a\n"))
+
+    def test_other_iio_devices(self):
+        self.assertFalse(is_dht_name("rp1-adc"))
+        self.assertFalse(is_dht_name("dht22"))
+
+
 class ReadersWithoutHardwareTest(unittest.TestCase):
     """On a machine with no /sys drivers the readers must fail closed, not raise."""
 
+    @unittest.skipIf(W1_DEVICES.exists(), "1-Wire driver loaded: this is the Pi, a real sensor may answer")
     def test_ds18b20_returns_none(self):
         self.assertIsNone(read_ds18b20())
 
+    @unittest.skipIf(IIO_DEVICES.exists(), "IIO bus present: this is the Pi, a real sensor may answer")
     def test_dht22_returns_none_pair(self):
         self.assertEqual(read_dht22(), (None, None))
 
