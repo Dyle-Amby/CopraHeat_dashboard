@@ -327,6 +327,18 @@ class WalkthroughSession:
         # Sorting grade counters
         self.grade_counts = {"great": 0, "good": 0, "bad": 0}
 
+        # Vision classifier and USB webcam
+        self.classifier = None
+        self.webcam = None
+        if not getattr(args, "no_camera", False):
+            try:
+                from hardware.vision import CopraClassifier, USBWebcam
+
+                self.classifier = CopraClassifier(model_path=args.model, labels_path=args.labels)
+                self.webcam = USBWebcam(camera_index=args.camera)
+            except Exception as exc:
+                print(f"Notice: Vision module not active ({exc}); manual grades only.")
+
         # Background DB sync thread
         self.sync_thread = threading.Thread(target=self._sync_loop, daemon=True)
         self.sync_thread.start()
@@ -555,16 +567,15 @@ class WalkthroughSession:
 
     def _step_sorting(self) -> None:
         print("\n--- PHASE 4: SORTING (SEGREGATION MECHANISM) ---")
-        print("Enter grades sequentially to command the bin carriage stepper:")
-        print("  - 'great' : moves carriage to GREAT bin (LS1 stop)")
-        print("  - 'good'  : moves carriage to GOOD bin (LS2 stop)")
-        print("  - 'bad'   : moves carriage to BAD bin (LS3 stop)")
-        print("  - 'done'  : finishes sorting and closes the batch")
+        print("Choose how to grade each copra piece:")
+        print("  - [Enter] / 'cam' : capture snapshot from USB webcam & classify with AI")
+        print("  - 'great'/'good'/'bad' : manual grade override")
+        print("  - 'done' : finishes sorting and closes the batch")
 
         while self.controller.state is BatchState.SORTING:
             self.tick_controller()
             try:
-                cmd = input("\nEnter copra grade (great / good / bad / done): ").strip().lower()
+                cmd = input("\nEnter grade ([Enter]=Webcam AI, great, good, bad, done): ").strip().lower()
             except EOFError:
                 break
 
@@ -572,6 +583,25 @@ class WalkthroughSession:
                 self.controller.finish_sorting()
                 self.tick_controller()
                 break
+
+            if cmd in ("", "cam", "camera", "scan"):
+                if self.webcam is not None and self.classifier is not None and self.classifier.is_ready:
+                    print("Capturing frame from USB webcam...")
+                    try:
+                        grade, conf, scores = self.webcam.snapshot_grade(self.classifier)
+                        print(f">>> WEBCAM AI RESULT: {grade.upper()} (confidence: {conf*100:.1f}%)")
+                        cmd = grade
+                    except Exception as exc:
+                        print(f"Webcam capture error ({exc}); please enter grade manually:")
+                        continue
+                elif self.classifier is not None:
+                    # Simulated prediction when webcam / tflite not attached
+                    grade, conf, scores = self.classifier.predict(None)
+                    print(f">>> WEBCAM AI (SIMULATED): {grade.upper()} (confidence: {conf*100:.1f}%)")
+                    cmd = grade
+                else:
+                    print("Webcam module not active. Please type 'great', 'good', or 'bad'.")
+                    continue
 
             if cmd in ("great", "good", "bad"):
                 try:
@@ -585,7 +615,7 @@ class WalkthroughSession:
                 except Exception as exc:
                     print(f"Carriage motion error: {exc}")
             else:
-                print("Invalid input. Type 'great', 'good', 'bad', or 'done'.")
+                print("Invalid input. Press [Enter] for webcam AI, or type 'great', 'good', 'bad', or 'done'.")
 
     def _step_complete(self) -> None:
         print("\n--- BATCH COMPLETE ---")
@@ -613,6 +643,8 @@ class WalkthroughSession:
     def cleanup(self) -> None:
         self.running = False
         self.harness.close()
+        if self.webcam is not None:
+            self.webcam.release()
         if self.db_conn is not None:
             db.mark_supervisor_stopped(self.db_conn)
             self.db_conn.close()
@@ -648,7 +680,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--open-angle", type=float, default=90.0, help="servo gate open angle")
     p.add_argument("--closed-angle", type=float, default=0.0, help="servo gate closed angle")
 
+    # Vision & Camera options
+    p.add_argument("--camera", type=int, default=0, help="USB webcam device index (default: 0)")
+    p.add_argument("--model", default=None, help="path to cords_model.tflite")
+    p.add_argument("--labels", default=None, help="path to labels.txt")
+    p.add_argument("--no-camera", action="store_true", help="disable webcam during sorting")
+
     return p.parse_args(argv)
+
 
 
 def main(argv: list[str] | None = None) -> None:

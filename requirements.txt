@@ -3,3 +3,7 @@ gpiozero>=2.0           # Pi-only at runtime; uses the lgpio backend on Pi OS Bo
 rpi-hardware-pwm>=0.2   # Pi-only at runtime; hopper servo on GPIO18
 # lgpio (HX711 bit-bang) comes from Pi OS's python3-lgpio system package --
 # create the venv with --system-site-packages so it is visible.
+opencv-python>=4.8.0    # USB webcam capture and image resizing
+numpy>=1.24.0           # Array operations for TFLite inference
+# tflite-runtime or tensorflow needed for on-device inference:
+# On Raspberry Pi OS: pip install tflite-runtime
