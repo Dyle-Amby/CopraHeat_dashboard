@@ -72,30 +72,54 @@ class Outputs:
     def __init__(self, fan_active_low: bool):
         from gpiozero import OutputDevice
 
-        self.fan = OutputDevice(pins.FAN_RELAY, active_high=not fan_active_low, initial_value=False)
-        self.heater = OutputDevice(pins.HEATER_SSR, initial_value=False)
+        self.devices = {
+            "fans": (OutputDevice(pins.FAN_RELAY, active_high=not fan_active_low, initial_value=False),
+                     pins.FAN_RELAY),
+            "heaters": (OutputDevice(pins.HEATER_SSR, initial_value=False), pins.HEATER_SSR),
+        }
+        # what we commanded, kept here rather than read back from the pin, so a
+        # wiring fault dragging the line down cannot make the menu lie about it
+        self.on = {name: False for name in self.devices}
+
+    def set(self, name: str, on: bool) -> None:
+        device, gpio = self.devices[name]
+        device.value = on
+        self.on[name] = on
+        level = pin_level(gpio)
+        print(f"{stamp()}  {name} {'ON' if on else 'off'}  (GPIO{gpio} reads {level})")
 
     def status(self) -> str:
-        return f"fans={'ON' if self.fan.value else 'off'}  heaters={'ON' if self.heater.value else 'off'}"
+        return "  ".join(f"{name}={'ON' if on else 'off'}" for name, on in self.on.items())
 
     def close(self) -> None:
-        for out in (self.fan, self.heater):
-            out.off()
-            out.close()
+        for name, (device, _) in self.devices.items():
+            device.off()
+            device.close()
+            self.on[name] = False
 
 
-def toggle(device, name: str) -> None:
-    device.toggle()
-    print(f"{stamp()}  {name} {'ON' if device.value else 'off'}")
+def pin_level(gpio: int) -> str:
+    """The pin's actual level as the Pi sees it, via pinctrl; '?' if unavailable."""
+    import subprocess
+
+    try:
+        out = subprocess.run(["pinctrl", "lev", str(gpio)], capture_output=True, text=True, timeout=2)
+        return {"1": "HIGH", "0": "low"}.get(out.stdout.strip(), "?")
+    except (OSError, subprocess.SubprocessError):
+        return "?"
+
+
+def toggle(outputs: Outputs, name: str) -> None:
+    outputs.set(name, not outputs.on[name])
 
 
 def heater_toggle(outputs: Outputs) -> None:
-    if not outputs.heater.value:
+    if not outputs.on["heaters"]:
         print("HEATERS: 220 V bulbs. Keep hands clear of the chamber.")
-        if input("type yes to switch them on: ").strip().lower() != "yes":
+        if input("type yes to switch them on: ").strip().lower() not in ("y", "yes"):
             print("  left off")
             return
-    toggle(outputs.heater, "heaters")
+    toggle(outputs, "heaters")
 
 
 def servo_menu(args: argparse.Namespace, state: dict) -> None:
@@ -222,7 +246,7 @@ def main(argv: list[str] | None = None) -> None:
     outputs = Outputs(args.fan_active_low)
     state: dict = {}
     actions = {
-        "1": lambda: toggle(outputs.fan, "fans"),
+        "1": lambda: toggle(outputs, "fans"),
         "2": lambda: heater_toggle(outputs),
         "3": lambda: servo_menu(args, state),
         "4": lambda: watch_switches(args),
