@@ -15,9 +15,7 @@
         <th>Weight in</th>
         <th>Weight out</th>
         <th>Weight loss</th>
-        <th>Great</th>
-        <th>Good</th>
-        <th>Bad</th>
+        <th>Grade</th>
         <th>Status</th>
       </tr>
     </thead>
@@ -31,13 +29,23 @@
         <td>{{ batch.weight_in_kg | num(2, ' kg') }}</td>
         <td>{{ batch.weight_out_kg | num(2, ' kg') }}</td>
         <td>{{ batch.weight_loss_pct | num(1, '%') }}</td>
-        <td><span class="ratio-great">{{ batch.great if batch.great is not none else '—' }}</span></td>
-        <td><span class="ratio-okay">{{ batch.good if batch.good is not none else '—' }}</span></td>
-        <td><span class="ratio-bad">{{ batch.bad if batch.bad is not none else '—' }}</span></td>
+        <td>
+          {% if batch.batch_grade is none and batch.operator_grade is none %}
+            <span class="state-badge" data-state="legacy" title="Recorded before batch-level vision grading was added">legacy</span>
+          {% else %}
+            {% set effective = batch.operator_grade or batch.batch_grade %}
+            <span class="state-badge" data-state="{{ effective }}" title="{% if batch.override_used %}Operator assigned {{ batch.operator_grade }} (Machine: {{ batch.batch_grade or 'none' }}){% else %}Machine: {{ batch.batch_grade }}{% endif %}{% if batch.needs_review %} · Review required{% endif %} · {{ batch.sample_valid_n }}/{{ batch.sample_total_n }} frames">
+              {{ effective | capitalize }}{% if batch.override_used %}*{% endif %}
+            </span>
+            {% if batch.needs_review %}
+              <span class="badge-review-flag" title="Flagged for manual review">⚑</span>
+            {% endif %}
+          {% endif %}
+        </td>
         <td><span class="state-badge" data-state="{{ batch.state }}" {% if batch.abort_reason %}title="{{ batch.abort_reason }}"{% endif %}>{{ batch.state }}</span></td>
       </tr>
       {% else %}
-      <tr><td colspan="11" style="color:var(--muted);">No batches recorded yet.</td></tr>
+      <tr><td colspan="9" style="color:var(--muted);">No batches recorded yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>

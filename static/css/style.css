@@ -284,9 +284,15 @@ table.history-table tbody tr td:last-child{ border-radius:0 10px 10px 0; }
 .state-badge[data-state="drying"], .state-badge[data-state="intake"],
 .state-badge[data-state="cooldown"], .state-badge[data-state="sorting"],
 .state-badge[data-state="running"]{ background:var(--gold); color:var(--cream); }
-.state-badge[data-state="complete"]{ background:var(--great); color:var(--cream); }
+.state-badge[data-state="complete"], .state-badge[data-state="great"]{ background:var(--great); color:var(--cream); }
+.state-badge[data-state="good"]{ background:var(--okay); color:var(--cream); }
+.state-badge[data-state="bad"]{ background:var(--bad); color:var(--cream); }
+.state-badge[data-state="needs_review"]{ background:var(--bad); color:var(--cream); font-weight:700; }
+.state-badge[data-state="legacy"]{ background:transparent; border:1px dashed var(--muted); color:var(--muted); font-weight:normal; }
 .state-badge[data-state="aborted"], .state-badge[data-state="interrupted"],
 .state-badge[data-state="offline"]{ background:transparent; border:1.5px solid var(--bad); color:var(--bad); }
+
+.badge-review-flag{ color:var(--bad); font-weight:bold; font-size:1rem; margin-left:4px; vertical-align:middle; }
 
 .cmd-feedback{ font-size:0.85rem; margin:14px 4px 0; min-height:1.3em; }
 .cmd-feedback[data-kind="pending"]{ color:var(--muted); }

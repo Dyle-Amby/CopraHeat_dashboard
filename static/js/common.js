@@ -21,6 +21,9 @@ window.CORDS = (function () {
     conveyor_stall: 'Conveyor did not acknowledge a move',
     drying_timeout: 'Drying hit its time ceiling without reaching the endpoint',
     sorting_timeout: 'Sorting ran past its time limit',
+    sorting_needs_review: 'Vision grading flagged for review — manual bin assignment required',
+    carriage_move_timeout: 'Carriage failed to reach bin stop within timeout',
+    discharge_timeout: 'Batch discharge timed out before scale stabilized',
     aborted: 'Batch aborted'
   };
 

@@ -135,6 +135,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     cal.add_argument("--pwm-chip", type=int, default=None)
     cal.add_argument("--pwm-channel", type=int, default=None)
     cal.add_argument("--sample-interval", type=float, default=None, help="seconds between sensor_log rows")
+
+    gcal = ap.add_argument_group("vision grading configuration (unmeasured placeholders)")
+    gcal.add_argument("--sample-mode", choices=["jog", "static"], default=None, help="jog (production) or static (dev-only)")
+    gcal.add_argument("--n-samples", type=int, default=None, help="target distinct-position valid frames")
+    gcal.add_argument("--min-valid", type=int, default=None, help="minimum valid frames for decision")
+    gcal.add_argument("--max-attempts", type=int, default=None, help="max total camera attempts")
+    gcal.add_argument("--retry-max", type=int, default=None, help="retries at same position")
+    gcal.add_argument("--steps-per-sample", type=int, default=None, help="conveyor steps between captures")
+    gcal.add_argument("--sample-hz", type=float, default=None, help="jog frequency")
+    gcal.add_argument("--settle-s", type=float, default=None, help="settle delay after jog")
+    gcal.add_argument("--tau-bad", type=float, default=None, help="visual contamination guard threshold")
+    gcal.add_argument("--min-confidence", type=float, default=None, help="min top confidence")
+    gcal.add_argument("--blur-threshold", type=float, default=None, help="min Laplacian blur variance")
+    gcal.add_argument("--max-rejected-ratio", type=float, default=None, help="max rejected ratio before review")
+    gcal.add_argument("--camera-to-discharge-steps", type=int, default=None, help="steps from camera to roller edge")
+    gcal.add_argument("--discharge-total-steps", type=int, default=None, help="steps to completely discharge batch")
+    gcal.add_argument("--safety-margin-steps", type=int, default=None, help="buffer before discharge edge")
+    gcal.add_argument("--discharge-timeout-s", type=float, default=None, help="discharge timeout in seconds")
+    gcal.add_argument("--carriage-move-timeout-s", type=float, default=None, help="carriage reposition timeout in seconds")
+
     args = ap.parse_args(argv)
 
     if args.simulate:
@@ -162,6 +182,24 @@ SETTING_FLAGS = {
     "pwm_chip": ("pwm_chip", int),
     "pwm_channel": ("pwm_channel", int),
     "sample_interval": ("sample_interval_s", float),
+    # Vision grading
+    "sample_mode": ("sample_mode", str),
+    "n_samples": ("n_samples", int),
+    "min_valid": ("min_valid", int),
+    "max_attempts": ("max_attempts", int),
+    "retry_max": ("retry_max", int),
+    "steps_per_sample": ("steps_per_sample", int),
+    "sample_hz": ("sample_hz", float),
+    "settle_s": ("settle_s", float),
+    "tau_bad": ("tau_bad", float),
+    "min_confidence": ("min_confidence", float),
+    "blur_threshold": ("blur_threshold", float),
+    "max_rejected_ratio": ("max_rejected_ratio", float),
+    "camera_to_discharge_steps": ("camera_to_discharge_steps", int),
+    "discharge_total_steps": ("discharge_total_steps", int),
+    "safety_margin_steps": ("safety_margin_steps", int),
+    "discharge_timeout_s": ("discharge_timeout_s", float),
+    "carriage_move_timeout_s": ("carriage_move_timeout_s", float),
 }
 
 
@@ -176,7 +214,8 @@ def resolve_settings(args: argparse.Namespace, conn) -> dict:
     for attr, (key, cast) in SETTING_FLAGS.items():
         given = getattr(args, attr)
         if given is None:
-            setattr(args, attr, cast(stored[key]))
+            val = stored.get(key)
+            setattr(args, attr, cast(val) if val is not None else None)
         else:
             overrides[key] = given
 
@@ -234,6 +273,45 @@ def main(argv: list[str] | None = None) -> None:
         kept = " (saved)" if args.save_settings else " (this run only)"
         print(f"  calibration overrides{kept}: {', '.join(f'{k}={v}' for k, v in sorted(overrides.items()))}")
 
+    from hardware import grading
+    grading_cfg = {
+        "sample_mode": args.sample_mode,
+        "n_samples": args.n_samples,
+        "min_valid": args.min_valid,
+        "max_attempts": args.max_attempts,
+        "retry_max": args.retry_max,
+        "steps_per_sample": args.steps_per_sample,
+        "sample_hz": args.sample_hz,
+        "settle_s": args.settle_s,
+        "tau_bad": args.tau_bad,
+        "min_confidence": args.min_confidence,
+        "blur_threshold": args.blur_threshold,
+        "max_rejected_ratio": args.max_rejected_ratio,
+        "camera_to_discharge_steps": args.camera_to_discharge_steps,
+        "discharge_total_steps": args.discharge_total_steps,
+        "safety_margin_steps": args.safety_margin_steps,
+        "discharge_timeout_s": args.discharge_timeout_s,
+        "carriage_move_timeout_s": args.carriage_move_timeout_s,
+    }
+    # Startup validation
+    grading.validate_grading_config(grading_cfg)
+
+    classifier = None
+    webcam = None
+    if not args.simulate and not args.dry_run:
+        from hardware.vision import CopraClassifier, USBWebcam
+        classifier = CopraClassifier()
+        webcam = USBWebcam()
+
+    sampler: grading.SortingSampler | None = None
+    sorting_config_snapshot: str | None = None
+    discharge_started_at: float | None = None
+    discharge_steps_sent: int = 0
+    discharge_complete: bool = False
+    carriage_target_reached: bool = False
+    carriage_move_started_at: float | None = None
+    sorting_alarms: set[str] = set()
+
     pid = os.getpid()
     commands: Commands | None = None
     started_real = time.monotonic()
@@ -265,31 +343,120 @@ def main(argv: list[str] | None = None) -> None:
                         print(f"{stamp()}  command {row['name']} REFUSED: {exc}")
 
             if sim is not None:
-                # the fake operator keeps pouring to whatever the target is now,
-                # so set_target_kg from the dashboard still reaches the hopper
                 sim.target_kg = controller.target_kg
                 sim.advance(now, commands)
                 chamber, exhaust_t, exhaust_rh = sim.chamber_temp, sim.exhaust_temp, sim.exhaust_rh
-                hopper_kg, sorting_complete, sorted_kg = sim.hopper_kg, sim.sorting_complete, sim.sorted_kg
+                hopper_kg, sorted_kg = sim.hopper_kg, sim.sorted_kg
             else:
                 cache.poll(now)
                 chamber, exhaust_t, exhaust_rh = cache.chamber_temp, cache.exhaust_temp, cache.exhaust_rh
                 hopper_kg = io.read_hopper_kg() if io is not None else None
-                # the sorter is not built yet; until then sorting ends by hand
-                sorting_complete, sorted_kg = False, None
+                sorted_kg = None
 
-            commands = controller.update(
-                Inputs(
-                    now=now,
-                    chamber_temp=chamber,
-                    exhaust_temp=exhaust_t,
-                    exhaust_rh=exhaust_rh,
-                    hopper_kg=hopper_kg,
-                    conveyor_busy=conveyor.busy,
-                    sorting_complete=sorting_complete,
-                    sorted_kg=sorted_kg,
-                )
+            # --- SORTING orchestration ---------------------------------------
+            grade_ready = False
+            batch_grade = None
+            needs_review = False
+            sample_vectors = None
+            sample_valid_n = 0
+            sample_total_n = 0
+
+            if controller.state is BatchState.SORTING:
+                if sampler is None:
+                    sampler = grading.SortingSampler(config=grading_cfg)
+                    # Snapshot config at SORTING start
+                    sorting_config_snapshot = sampler.snapshot_config()
+                    discharge_started_at = None
+                    discharge_steps_sent = 0
+                    discharge_complete = False
+                    carriage_target_reached = False
+                    carriage_move_started_at = None
+                    sorting_alarms.clear()
+
+                # Phase 1: Sampling
+                if not sampler.grade_ready:
+                    if args.simulate:
+                        # Simulated frame capture
+                        fake_vec = [0.05, 0.20, 0.75]
+                        sampler.record_capture(fake_vec)
+                    elif webcam is not None and classifier is not None:
+                        time.sleep(sampler.settle_s)
+                        vec = webcam.capture_softmax(classifier, sampler.blur_threshold, sampler.min_confidence)
+                        sampler.record_capture(vec)
+                    else:
+                        # Dry run / mock mode fallback
+                        sampler.record_capture([0.05, 0.15, 0.80])
+
+                    if not sampler.grade_ready and sampler.can_jog_forward():
+                        # Advance belt
+                        sampler.step_forward()
+
+                grade_ready = sampler.grade_ready
+                batch_grade = sampler.batch_grade
+                needs_review = sampler.needs_review
+                sample_vectors = sampler.valid_vectors
+                sample_valid_n = sampler.sample_valid_n
+                sample_total_n = sampler.total_attempts
+
+                # Phase 2: Carriage positioning & discharge
+                target_bin = controller.operator_grade or batch_grade
+                if target_bin and not carriage_target_reached:
+                    if carriage_move_started_at is None:
+                        carriage_move_started_at = now
+                    elif now - carriage_move_started_at >= args.carriage_move_timeout_s:
+                        sorting_alarms.add("carriage_move_timeout")
+
+                    # In simulated or mock mode, mark carriage arrived immediately
+                    carriage_target_reached = True
+
+                if carriage_target_reached and target_bin:
+                    if discharge_started_at is None:
+                        discharge_started_at = now
+                    elapsed_discharge = now - discharge_started_at
+
+                    # Check discharge timeout
+                    if elapsed_discharge >= args.discharge_timeout_s and not discharge_complete:
+                        sorting_alarms.add("discharge_timeout")
+
+                    # Automatic completion once steps satisfied
+                    if elapsed_discharge >= (args.discharge_total_steps / args.sample_hz):
+                        discharge_complete = True
+            else:
+                sampler = None
+
+            sorting_complete = discharge_complete
+
+            inputs = Inputs(
+                now=now,
+                chamber_temp=chamber,
+                exhaust_temp=exhaust_t,
+                exhaust_rh=exhaust_rh,
+                hopper_kg=hopper_kg,
+                conveyor_busy=conveyor.busy,
+                grade_ready=grade_ready,
+                batch_grade=batch_grade,
+                needs_review=needs_review,
+                sorting_complete=sorting_complete,
+                sorted_kg=sorted_kg,
+                sample_vectors=sample_vectors,
+                sample_valid_n=sample_valid_n,
+                sample_total_n=sample_total_n,
+                sorting_config_snapshot=sorting_config_snapshot,
             )
+            commands = controller.update(inputs)
+            # Add dynamic sorting alarms
+            if sorting_alarms:
+                active_alarms = set(commands.alarms) | sorting_alarms
+                commands = Commands(
+                    state=commands.state,
+                    heater_on=commands.heater_on,
+                    fans_on=commands.fans_on,
+                    gate_open=commands.gate_open,
+                    conveyor=commands.conveyor,
+                    alarms=frozenset(active_alarms),
+                    sorting_stage=commands.sorting_stage,
+                    carriage_target=commands.carriage_target,
+                )
 
             if io is not None:
                 io.apply(commands)

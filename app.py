@@ -44,6 +44,10 @@ def validate_command(name, payload):
         if not math.isfinite(value) or value <= 0:
             raise ValueError("target weight must be greater than zero")
         return name, repr(value)
+    if name == "override_grade":
+        if payload not in ("great", "good", "bad"):
+            raise ValueError(f"invalid grade {payload!r}; expected 'great', 'good', or 'bad'")
+        return name, payload
     if name == "abort":
         reason = (payload or "").strip() or "operator abort"
         return name, reason[:ABORT_REASON_MAX]

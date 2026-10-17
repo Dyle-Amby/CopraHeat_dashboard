@@ -10,6 +10,7 @@ document.addEventListener('DOMContentLoaded', function () {
     start: ['idle'],
     set_target_kg: ['idle', 'intake'],
     end_drying: ['drying'],
+    override_grade: ['sorting'],
     finish_sorting: ['sorting'],
     reset: ['complete', 'aborted'],
     abort: ['intake', 'drying', 'cooldown', 'sorting']
@@ -62,7 +63,9 @@ document.addEventListener('DOMContentLoaded', function () {
     btn.addEventListener('click', async () => {
       if (btn.dataset.confirm && !window.confirm(btn.dataset.confirm)) return;
       const name = btn.dataset.command;
-      const payload = name === 'abort' ? $('abortReason').value : null;
+      const payload = name === 'abort'
+        ? $('abortReason').value
+        : (btn.dataset.payload || null);
       const result = await run(name, payload);
       if (name === 'abort' && result.ok) $('abortReason').value = '';
     });

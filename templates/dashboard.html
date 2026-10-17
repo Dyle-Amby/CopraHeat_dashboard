@@ -100,11 +100,14 @@
         <li class="alarm-none">No active alarms</li>
       </ul>
       <hr class="hairline my-3">
-      <h6 class="card-eyebrow">Sorting results</h6>
-      <p class="stat-label mb-2" id="sortNote">Vision grading is not connected yet; counts appear here once the sorter reports them.</p>
-      <div class="tally-row"><span>Great</span><span class="tally-great" id="tallyGreat">&mdash;</span></div>
-      <div class="tally-row"><span>Good</span><span class="tally-okay" id="tallyGood">&mdash;</span></div>
-      <div class="tally-row"><span>Bad</span><span class="tally-bad" id="tallyBad">&mdash;</span></div>
+      <h6 class="card-eyebrow">Batch vision grading</h6>
+      <div id="gradeContainer" class="d-flex align-items-center justify-content-between mb-2">
+        <span class="stat-label">Assigned grade</span>
+        <span class="state-badge" id="batchGradeBadge" data-state="idle">—</span>
+      </div>
+      <p class="stat-label mb-2" id="sortNote">Sampling initiates during the sorting phase.</p>
+      <div class="tally-row"><span>Valid sample frames</span><span class="stat-value" id="sampleValidCount">—</span></div>
+      <div class="tally-row"><span>Total attempts</span><span class="stat-value" id="sampleTotalCount">—</span></div>
       <p class="stat-label mt-3 mb-0">Weight loss is worked out after sorting (hopper in vs. bins out) and recorded in <a href="{{ url_for('batch_history') }}">Batch history</a>.</p>
     </div>
   </div>

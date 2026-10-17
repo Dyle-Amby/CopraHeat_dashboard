@@ -23,7 +23,7 @@ _FINISHED = (BatchState.COMPLETE, BatchState.ABORTED)
 # The operator vocabulary, kept next to the methods it maps to. The data layer
 # validates against it and the supervisor dispatches with apply_command().
 COMMAND_NAMES = frozenset(
-    {"start", "end_drying", "finish_sorting", "abort", "reset", "set_target_kg"}
+    {"start", "end_drying", "finish_sorting", "abort", "reset", "set_target_kg", "override_grade"}
 )
 
 
@@ -37,8 +37,15 @@ class Inputs:
     exhaust_rh: float | None = None
     hopper_kg: float | None = None          # HX711 on the hopper gate
     conveyor_busy: bool = False             # runner is mid-move
-    sorting_complete: bool = False          # the sorter has graded the last piece
+    grade_ready: bool = False               # ensemble sampling finished or review needed
+    batch_grade: str | None = None          # machine decision: "great" | "good" | "bad"
+    needs_review: bool = False              # review flag
+    sorting_complete: bool = False          # discharge finished and load cell stable
     sorted_kg: float | None = None          # sum of the three bin load cells
+    sample_vectors: list[list[float]] | None = None
+    sample_valid_n: int = 0
+    sample_total_n: int = 0
+    sorting_config_snapshot: str | None = None
 
 
 @dataclass(frozen=True)
@@ -51,6 +58,8 @@ class Commands:
     gate_open: bool
     conveyor: ConveyorCommand
     alarms: frozenset[str]
+    sorting_stage: str | None = None        # "sample" | "await_review" | "discharge" | None
+    carriage_target: str | None = None      # "great" | "good" | "bad" | None
 
 
 @dataclass(frozen=True)
@@ -69,6 +78,14 @@ class BatchRecord:
     aborted: bool
     abort_reason: str | None
     alarms: frozenset[str]
+    batch_grade: str | None = None          # machine determination
+    operator_grade: str | None = None       # operator selection if overridden
+    override_used: bool = False             # True if operator selected the bin
+    needs_review: bool = False              # review required flag
+    sample_vectors: list[list[float]] | None = None
+    sample_valid_n: int = 0
+    sample_total_n: int = 0
+    sorting_config_snapshot: str | None = None
 
 
 def apply_command(controller: "BatchController", name: str, payload: str | None = None) -> str:
@@ -89,6 +106,11 @@ def apply_command(controller: "BatchController", name: str, payload: str | None 
     if name == "finish_sorting":
         controller.finish_sorting()
         return "sorting will end on the next tick"
+    if name == "override_grade":
+        if payload not in ("great", "good", "bad"):
+            raise ValueError(f"invalid grade {payload!r}; expected 'great', 'good', or 'bad'")
+        controller.override_grade(payload)
+        return f"grade overridden to {payload}"
     if name == "abort":
         reason = payload or "operator abort"
         controller.abort(reason)
@@ -170,6 +192,16 @@ class BatchController:
             raise RuntimeError(f"not sorting (state is {self.state.value})")
         self._finish_sorting_requested = True
 
+    def override_grade(self, grade: str) -> None:
+        """Operator manual bin assignment (used especially on needs_review)."""
+        if self.state is not BatchState.SORTING:
+            raise RuntimeError(f"cannot override grade from {self.state.value}")
+        if grade not in ("great", "good", "bad"):
+            raise ValueError(f"invalid grade {grade!r}")
+        self.operator_grade = grade
+        self.override_used = True
+        self._alarms.discard("sorting_needs_review")
+
     def abort(self, reason: str = "operator abort") -> None:
         if self.state not in _LIVE:
             raise RuntimeError(f"no batch to abort (state is {self.state.value})")
@@ -207,6 +239,14 @@ class BatchController:
             aborted=self.aborted,
             abort_reason=self.abort_reason,
             alarms=frozenset(self._alarms),
+            batch_grade=self.batch_grade,
+            operator_grade=self.operator_grade,
+            override_used=self.override_used,
+            needs_review=self.needs_review,
+            sample_vectors=self.sample_vectors,
+            sample_valid_n=self.sample_valid_n,
+            sample_total_n=self.sample_total_n,
+            sorting_config_snapshot=self.sorting_config_snapshot,
         )
 
     # --- the loop ------------------------------------------------------------
@@ -229,6 +269,8 @@ class BatchController:
 
         gate_open = False
         conveyor = ConveyorCommand.STOP
+        sorting_stage = None
+        carriage_target = None
 
         if self.state is BatchState.INTAKE:
             gate_open, conveyor = self._intake(i)
@@ -237,7 +279,7 @@ class BatchController:
         elif self.state is BatchState.COOLDOWN:
             self._cooldown(i)
         elif self.state is BatchState.SORTING:
-            conveyor = self._sorting(i)
+            conveyor, sorting_stage, carriage_target = self._sorting(i)
 
         # run the climate controllers on the state we just landed in, so a
         # transition takes effect on this tick rather than the next one
@@ -252,6 +294,8 @@ class BatchController:
             gate_open=gate_open,
             conveyor=conveyor,
             alarms=frozenset(self._alarms),
+            sorting_stage=sorting_stage,
+            carriage_target=carriage_target,
         )
 
     # --- per-state handling --------------------------------------------------
@@ -272,11 +316,7 @@ class BatchController:
                 self._alarms.add("intake_stall")
             return gate_open, ConveyorCommand.STOP
 
-        # Dispense done: carry the batch into the chamber. Dead reckoning -- the
-        # runner owns the calibrated step count and reports the move through
-        # conveyor_busy, so wait to see it go busy before trusting it went idle.
-        # (Open mechanical question: whether the belt should instead creep during
-        # dispensing to spread the copra. That changes this branch, nothing else.)
+        # Dispense done: carry the batch into the chamber.
         if i.conveyor_busy:
             self._conveyor_ack = True
         elif self._conveyor_ack:
@@ -305,16 +345,47 @@ class BatchController:
         if cool or i.now - self._entered_at >= self.max_cooldown_s:
             self._to(BatchState.ABORTED if self.aborted else BatchState.SORTING, i.now)
 
-    def _sorting(self, i: Inputs) -> ConveyorCommand:
+    def _sorting(self, i: Inputs) -> tuple[ConveyorCommand, str, str | None]:
         if i.sorted_kg is not None:
             self.weight_out_kg = i.sorted_kg
+
+        # Update metadata if provided in Inputs
+        if i.batch_grade is not None and self.batch_grade is None:
+            self.batch_grade = i.batch_grade
+        if i.needs_review:
+            self.needs_review = True
+            if not self.override_used:
+                self._alarms.add("sorting_needs_review")
+        if i.sample_vectors is not None:
+            self.sample_vectors = i.sample_vectors
+        if i.sample_valid_n:
+            self.sample_valid_n = i.sample_valid_n
+        if i.sample_total_n:
+            self.sample_total_n = i.sample_total_n
+        if i.sorting_config_snapshot is not None:
+            self.sorting_config_snapshot = i.sorting_config_snapshot
+
+        effective_grade = self.operator_grade or self.batch_grade
+
+        # Operator manual finish override OR discharge completion
         if i.sorting_complete or self._finish_sorting_requested:
             self._finish_sorting_requested = False
             self._to(BatchState.COMPLETE, i.now)
-            return ConveyorCommand.STOP
+            return ConveyorCommand.STOP, "complete", effective_grade
+
         if i.now - self._entered_at >= self.max_sorting_s:
             self._alarms.add("sorting_timeout")
-        return ConveyorCommand.SORT_CREEP
+
+        # Before grade is ready: sampling stage, NO discharge
+        if not i.grade_ready and effective_grade is None:
+            return ConveyorCommand.STOP, "sample", None
+
+        # Grade is ready, but review needed and no operator override yet
+        if self.needs_review and not self.override_used and self.operator_grade is None:
+            return ConveyorCommand.STOP, "await_review", None
+
+        # Target confirmed (either via auto-grade or operator override): discharge stage
+        return ConveyorCommand.SORT_CREEP, "discharge", effective_grade
 
     # --- transitions ---------------------------------------------------------
 
@@ -352,6 +423,14 @@ class BatchController:
         self.weight_out_kg: float | None = None
         self.aborted = False
         self.abort_reason: str | None = None
+        self.batch_grade: str | None = None
+        self.operator_grade: str | None = None
+        self.override_used: bool = False
+        self.needs_review: bool = False
+        self.sample_vectors: list[list[float]] | None = None
+        self.sample_valid_n: int = 0
+        self.sample_total_n: int = 0
+        self.sorting_config_snapshot: str | None = None
         self._dispensed = False
         self._conveyor_ack = False
         self._advance_started = now

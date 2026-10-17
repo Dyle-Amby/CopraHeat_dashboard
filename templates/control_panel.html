@@ -50,8 +50,20 @@
 
       <div class="override-row">
         <div>
+          <span class="override-label">Assign bin (Review / Manual override)</span>
+          <span class="override-sub">Route carriage and discharge batch to the selected bin (used on review flag or override).</span>
+        </div>
+        <div class="d-flex gap-2">
+          <button class="btn-outline-ink cp-btn" data-command="override_grade" data-payload="great">Great</button>
+          <button class="btn-outline-ink cp-btn" data-command="override_grade" data-payload="good">Good</button>
+          <button class="btn-outline-ink cp-btn" data-command="override_grade" data-payload="bad">Bad</button>
+        </div>
+      </div>
+
+      <div class="override-row">
+        <div>
           <span class="override-label">Finish sorting</span>
-          <span class="override-sub">Marks the last piece sorted and closes the batch record</span>
+          <span class="override-sub">Manual override: completes the sorting phase and closes the batch</span>
         </div>
         <button class="btn-outline-ink cp-btn" data-command="finish_sorting" data-confirm="Mark sorting as finished?">Finish sorting</button>
       </div>

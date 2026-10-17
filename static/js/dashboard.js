@@ -97,11 +97,34 @@ document.addEventListener('DOMContentLoaded', function () {
 
     renderAlarms(live.alarms || []);
 
-    if (batch && (batch.great != null || batch.good != null || batch.bad != null)) {
-      $('sortNote').textContent = 'Batch #' + batch.id;
-      $('tallyGreat').textContent = batch.great ?? '—';
-      $('tallyGood').textContent = batch.good ?? '—';
-      $('tallyBad').textContent = batch.bad ?? '—';
+    if (batch) {
+      const grade = batch.operator_grade || batch.batch_grade;
+      const badge = $('batchGradeBadge');
+      if (grade) {
+        badge.textContent = grade.toUpperCase() + (batch.override_used ? '*' : '');
+        badge.dataset.state = grade;
+      } else if (batch.needs_review) {
+        badge.textContent = 'NEEDS REVIEW';
+        badge.dataset.state = 'needs_review';
+      } else {
+        badge.textContent = '—';
+        badge.dataset.state = 'idle';
+      }
+
+      if (batch.sample_valid_n != null) {
+        $('sampleValidCount').textContent = batch.sample_valid_n;
+      }
+      if (batch.sample_total_n != null) {
+        $('sampleTotalCount').textContent = batch.sample_total_n;
+      }
+
+      if (batch.needs_review && !batch.override_used) {
+        $('sortNote').textContent = 'Flagged for review — assign bin via Control Panel';
+      } else if (batch.override_used) {
+        $('sortNote').textContent = `Operator override: ${batch.operator_grade} (Machine: ${batch.batch_grade || 'none'})`;
+      } else if (batch.batch_grade) {
+        $('sortNote').textContent = `Ensemble consensus: ${batch.batch_grade.toUpperCase()}`;
+      }
     }
   });
 });

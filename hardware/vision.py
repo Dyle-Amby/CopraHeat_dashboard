@@ -162,6 +162,38 @@ class USBWebcam:
             raise RuntimeError(f"Could not read frame from USB camera #{self.camera_index}")
         return classifier.predict(frame)
 
+    def capture_softmax(
+        self,
+        classifier: CopraClassifier,
+        blur_threshold: float = 100.0,
+        min_confidence: float = 0.55,
+    ) -> list[float] | None:
+        """Capture a frame, filter for blur & confidence, and return softmax vector.
+
+        Returns:
+            [p_bad, p_good, p_great] or None if rejected by blur or low confidence.
+        """
+        ok, frame = self.read_frame()
+        if not ok or frame is None:
+            return None
+
+        # Check blur using Laplacian variance
+        try:
+            import cv2
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+            laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+            if laplacian_var < blur_threshold:
+                return None
+        except Exception:
+            pass  # Fall through if cv2 not available
+
+        top_grade, top_conf, scores = classifier.predict(frame)
+        if top_conf < min_confidence:
+            return None
+
+        # Return vector ordered by ("bad", "good", "great")
+        return [scores.get(label, 0.0) for label in ("bad", "good", "great")]
+
     def release(self) -> None:
         if self._cap is not None:
             self._cap.release()

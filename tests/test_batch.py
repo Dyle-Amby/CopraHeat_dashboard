@@ -292,7 +292,7 @@ class TestSorting(unittest.TestCase):
         self.c.update(Inputs(now=self.t + 1, chamber_temp=30.0))
 
     def test_conveyor_creeps_past_the_camera(self):
-        out = self.c.update(Inputs(now=self.t + 2, chamber_temp=30.0))
+        out = self.c.update(Inputs(now=self.t + 2, chamber_temp=30.0, grade_ready=True, batch_grade="good"))
         self.assertIs(out.state, SORTING)
         self.assertIs(out.conveyor, ConveyorCommand.SORT_CREEP)
 
@@ -405,8 +405,9 @@ class TestApplyCommand(unittest.TestCase):
         # ValueError("unknown command"); a state refusal is RuntimeError
         for name in COMMAND_NAMES:
             with self.subTest(name=name):
+                payload = "good" if name == "override_grade" else "1.0"
                 try:
-                    apply_command(make(), name, "1.0")
+                    apply_command(make(), name, payload)
                 except ValueError as exc:
                     self.fail(f"{name} is not dispatched: {exc}")
                 except RuntimeError:

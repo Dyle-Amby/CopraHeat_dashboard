@@ -24,7 +24,7 @@ from pathlib import Path
 
 from hardware.batch import COMMAND_NAMES, BatchRecord
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # app.py must run from inside CopraHeat_dashboard, but the supervisor may not,
 # so anchor the default to this file rather than the working directory
@@ -44,28 +44,55 @@ DEFAULT_SETTINGS = {
     "pwm_chip": "2",
     "pwm_channel": "2",
     "sample_interval_s": "10.0",
+    # Unmeasured placeholder vision grading configuration
+    "sample_mode": "jog",
+    "n_samples": "20",
+    "min_valid": "10",
+    "max_attempts": "40",
+    "retry_max": "3",
+    "steps_per_sample": "200",
+    "sample_hz": "200.0",
+    "settle_s": "0.3",
+    "tau_bad": "0.20",
+    "min_confidence": "0.55",
+    "blur_threshold": "100.0",
+    "max_rejected_ratio": "0.40",
+    "camera_to_discharge_steps": "5000",
+    "discharge_total_steps": "3000",
+    "safety_margin_steps": "500",
+    "discharge_timeout_s": "60.0",
+    "carriage_move_timeout_s": "30.0",
 }
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS batches (
-    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
-    started_at         TEXT    NOT NULL,
-    finished_at        TEXT,
-    state              TEXT    NOT NULL,
-    duration_s         REAL,
-    drying_s           REAL,
-    target_kg          REAL,
-    weight_in_kg       REAL,
-    weight_out_kg      REAL,
-    weight_loss_pct    REAL,
-    aborted            INTEGER NOT NULL DEFAULT 0,
-    abort_reason       TEXT,
-    alarms             TEXT,
-    -- vision output; NULL until the sorter exists. Nothing fabricates a value.
-    great              INTEGER,
-    good               INTEGER,
-    bad                INTEGER,
-    final_moisture_pct REAL
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at              TEXT    NOT NULL,
+    finished_at             TEXT,
+    state                   TEXT    NOT NULL,
+    duration_s              REAL,
+    drying_s                REAL,
+    target_kg               REAL,
+    weight_in_kg            REAL,
+    weight_out_kg           REAL,
+    weight_loss_pct         REAL,
+    aborted                 INTEGER NOT NULL DEFAULT 0,
+    abort_reason            TEXT,
+    alarms                  TEXT,
+    -- vision output; legacy per-piece count columns preserved untouched
+    great                   INTEGER,
+    good                    INTEGER,
+    bad                     INTEGER,
+    final_moisture_pct      REAL,
+    -- v2 additive batch-level ensemble vision grading columns
+    batch_grade             TEXT,
+    operator_grade          TEXT,
+    override_used           INTEGER NOT NULL DEFAULT 0,
+    needs_review            INTEGER NOT NULL DEFAULT 0,
+    sample_vectors          TEXT,
+    sample_valid_n          INTEGER NOT NULL DEFAULT 0,
+    sample_total_n          INTEGER NOT NULL DEFAULT 0,
+    sorting_config_snapshot TEXT
 );
 
 -- No ambient column and no live moisture or weight-loss column: there is no
@@ -144,12 +171,48 @@ def connect(path: str | Path | None = None, *, timeout: float = 5.0) -> sqlite3.
     return conn
 
 
+def backup_db(db_path: Path | str | None = None) -> Path:
+    """Create a timestamped backup copy of cords.db."""
+    src = Path(DEFAULT_PATH if db_path is None else db_path)
+    if not src.exists():
+        return src
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = src.parent / f"{src.name}.bak.{timestamp}"
+    import shutil
+    shutil.copy2(src, backup_path)
+    return backup_path
+
+
+def migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
+    """Migrate schema from version 1 to 2 by adding batch-level vision grading columns."""
+    cur = conn.cursor()
+    # Check if batch_grade column already exists
+    cur.execute("PRAGMA table_info(batches)")
+    columns = [row[1] for row in cur.fetchall()]
+    new_cols = [
+        ("batch_grade", "TEXT"),
+        ("operator_grade", "TEXT"),
+        ("override_used", "INTEGER NOT NULL DEFAULT 0"),
+        ("needs_review", "INTEGER NOT NULL DEFAULT 0"),
+        ("sample_vectors", "TEXT"),
+        ("sample_valid_n", "INTEGER NOT NULL DEFAULT 0"),
+        ("sample_total_n", "INTEGER NOT NULL DEFAULT 0"),
+        ("sorting_config_snapshot", "TEXT"),
+    ]
+    for col_name, col_type in new_cols:
+        if col_name not in columns:
+            cur.execute(f"ALTER TABLE batches ADD COLUMN {col_name} {col_type}")
+    conn.execute("PRAGMA user_version = 2")
+
+
 def init(conn: sqlite3.Connection) -> None:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    if version not in (0, SCHEMA_VERSION):
+    if version == 1:
+        migrate_v1_to_v2(conn)
+    elif version not in (0, SCHEMA_VERSION):
         raise RuntimeError(
             f"database schema is version {version}, this build expects {SCHEMA_VERSION}. "
-            "There are no migrations yet -- move the file aside and let it be recreated."
+            "There are no migrations for this version -- move the file aside or run backup."
         )
     conn.executescript(SCHEMA)
     conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
@@ -166,6 +229,15 @@ def _row_to_dict(row: sqlite3.Row | None) -> dict | None:
     out = dict(row)
     if "alarms" in out:
         out["alarms"] = json.loads(out["alarms"]) if out["alarms"] else []
+    if "sample_vectors" in out and out["sample_vectors"]:
+        try:
+            out["sample_vectors"] = json.loads(out["sample_vectors"])
+        except Exception:
+            pass
+    if "override_used" in out:
+        out["override_used"] = bool(out["override_used"])
+    if "needs_review" in out:
+        out["needs_review"] = bool(out["needs_review"])
     return out
 
 
@@ -209,7 +281,10 @@ def finish_batch(conn: sqlite3.Connection, batch_id: int, record: BatchRecord, s
         """UPDATE batches SET
                finished_at = ?, state = ?, duration_s = ?, drying_s = ?,
                weight_in_kg = ?, weight_out_kg = ?, weight_loss_pct = ?,
-               aborted = ?, abort_reason = ?, alarms = ?
+               aborted = ?, abort_reason = ?, alarms = ?,
+               batch_grade = ?, operator_grade = ?, override_used = ?,
+               needs_review = ?, sample_vectors = ?, sample_valid_n = ?,
+               sample_total_n = ?, sorting_config_snapshot = ?
            WHERE id = ?""",
         (
             now_iso(),
@@ -222,6 +297,14 @@ def finish_batch(conn: sqlite3.Connection, batch_id: int, record: BatchRecord, s
             int(record.aborted),
             record.abort_reason,
             json.dumps(sorted(record.alarms)),
+            record.batch_grade,
+            record.operator_grade,
+            int(record.override_used),
+            int(record.needs_review),
+            json.dumps(record.sample_vectors) if record.sample_vectors is not None else None,
+            record.sample_valid_n,
+            record.sample_total_n,
+            record.sorting_config_snapshot,
             batch_id,
         ),
     )
@@ -401,3 +484,29 @@ def set_setting(conn: sqlite3.Connection, key: str, value) -> None:
            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at""",
         (key, str(value), now_iso()),
     )
+
+
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+    ap = argparse.ArgumentParser(description="Database maintenance utilities for CORDS")
+    sub = ap.add_subparsers(dest="subcommand", required=True)
+
+    b = sub.add_parser("backup", help="Create a backup copy of cords.db")
+    b.add_argument("--db", default=None, help=f"Path to database (default: {DEFAULT_PATH})")
+
+    m = sub.add_parser("migrate", help="Run migrations up to current version")
+    m.add_argument("--db", default=None, help=f"Path to database (default: {DEFAULT_PATH})")
+
+    args = ap.parse_args(argv)
+    if args.subcommand == "backup":
+        bk = backup_db(args.db)
+        print(f"Database backed up to: {bk}")
+    elif args.subcommand == "migrate":
+        c = connect(args.db)
+        init(c)
+        c.close()
+        print("Database schema verified and up to date.")
+
+
+if __name__ == "__main__":
+    main()
