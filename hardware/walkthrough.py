@@ -670,7 +670,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     # Carriage stepper & limit switch options
     p.add_argument("--carriage-hz", type=float, default=DEFAULT_CARRIAGE_HZ, help="carriage step frequency")
     p.add_argument("--carriage-max-steps", type=int, default=DEFAULT_CARRIAGE_MAX_STEPS, help="carriage max move cap")
-    p.add_argument("--up-reverse", action="store_true", help="invert carriage direction (up is reverse)")
+    p.add_argument("--up-reverse", action=argparse.BooleanOptionalAction, default=True,
+                   help="invert carriage direction (up is reverse, default: True)")
     p.add_argument("--order", nargs="+", default=list(carriage.ORDER), help="switch names bottom to top")
     p.add_argument("--bins", nargs="+", default=list(carriage.BINS), help="bins bottom to top")
 

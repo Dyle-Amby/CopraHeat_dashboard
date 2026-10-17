@@ -349,7 +349,8 @@ def main(argv: list[str] | None = None) -> None:
     o.add_argument("grades", nargs="*", help="sequence to run; omit to type grades one by one")
     o.add_argument("--hz", type=float, default=400.0, help="steps per second")
     o.add_argument("--max-steps", type=int, default=20000, help="give up if no switch within this many steps")
-    o.add_argument("--up-reverse", action="store_true", help="the motor's reverse direction raises the carriage")
+    o.add_argument("--up-reverse", action=argparse.BooleanOptionalAction, default=True,
+                   help="the motor's reverse direction raises the carriage (default: True)")
     o.add_argument("--order", nargs=3, choices=SWITCHES, default=list(carriage.ORDER), metavar="LS",
                    help="limit switches bottom to top (default: LS1 LS2 LS3)")
     o.add_argument("--bins", nargs=3, default=list(carriage.BINS), metavar="GRADE",
