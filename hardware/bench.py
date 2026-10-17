@@ -220,15 +220,23 @@ def sort(args: argparse.Namespace) -> None:
         # asymmetric; until a pair has been travelled once, only --max-steps caps a
         # move that went the wrong way past an end stop
         travel: dict[frozenset, int] = {}
+        grades = list(args.grades) if args.grades else None
+        first_target = grade_stop[grades[0].lower()] if grades and grades[0].lower() in grade_stop else None
+
         here = carriage.located_at(ls.read())
         if here is None:
-            print(f"{stamp()}  carriage between stops: homing down to the nearest switch")
-            here, _ = carriage_move(stepper, ls, None, False, args.max_steps, args)
+            if first_target is not None:
+                # If a specific grade was requested, head straight for it; pass intermediate switches
+                print(f"{stamp()}  carriage between stops: moving directly to {first_target}")
+                here, _ = carriage_move(stepper, ls, first_target, True, args.max_steps, args)
+            else:
+                print(f"{stamp()}  carriage between stops: homing to nearest switch")
+                here, _ = carriage_move(stepper, ls, None, False, args.max_steps, args)
         else:
             print(f"{stamp()}  carriage resting at {here}")
 
-        grades = iter(args.grades) if args.grades else _prompt_grades(grade_stop)
-        for grade in grades:
+        grades_iter = iter(grades) if grades else _prompt_grades(grade_stop)
+        for grade in grades_iter:
             grade = grade.lower()
             if grade not in grade_stop:
                 print(f"  unknown grade {grade!r}; use one of {', '.join(grade_stop)}")

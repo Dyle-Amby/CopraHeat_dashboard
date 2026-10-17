@@ -55,10 +55,13 @@ class MoveWatch:
         self.release_within = release_within
         self._prev = initial
         self._released = self.start is None
-        self.passable: set[str] = set()
-        if self.start is not None and target is not None:
-            lo, hi = sorted((order.index(self.start), order.index(target)))
-            self.passable = set(order[lo + 1:hi])
+        if target is not None:
+            if self.start is not None:
+                lo, hi = sorted((order.index(self.start), order.index(target)))
+                self.passable = set(order[lo + 1:hi])
+            else:
+                # If started between stops, all switches on the way to target are passable
+                self.passable = set(order[:order.index(target)])
 
     def update(self, state: dict[str, bool], steps_sent: int) -> tuple[str, str | None]:
         """(MOVING, None), (ARRIVED, switch) or (FAULT, message)."""
