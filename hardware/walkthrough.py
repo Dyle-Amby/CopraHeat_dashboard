@@ -566,54 +566,77 @@ class WalkthroughSession:
         print("\nChamber safely cooled. Transitioning to SORTING!")
 
     def _step_sorting(self) -> None:
-        print("\n--- PHASE 4: SORTING (SEGREGATION MECHANISM) ---")
-        print("Choose how to grade each copra piece:")
-        print("  - [Enter] / 'cam' : capture snapshot from USB webcam & classify with AI")
-        print("  - 'great'/'good'/'bad' : manual grade override")
-        print("  - 'done' : finishes sorting and closes the batch")
+        print("\n--- PHASE 4: SORTING (BATCH-LEVEL ENSEMBLE SAMPLING & DISCHARGE) ---")
+        print("Choose how to grade this batch:")
+        print("  - [Enter] / 'cam' : capture multi-position frames with USB webcam & compute consensus")
+        print("  - 'great'/'good'/'bad' : manual batch grade assignment")
+        print("  - 'done' : manual finish override")
 
+        chosen_grade = None
         while self.controller.state is BatchState.SORTING:
             self.tick_controller()
             try:
-                cmd = input("\nEnter grade ([Enter]=Webcam AI, great, good, bad, done): ").strip().lower()
+                cmd = input("\nEnter batch grade ([Enter]=Webcam AI consensus, great, good, bad, done): ").strip().lower()
             except EOFError:
                 break
 
             if cmd in ("done", "finish", "q", "quit"):
-                self.controller.finish_sorting()
+                self.sorting_complete = True
                 self.tick_controller()
                 break
 
             if cmd in ("", "cam", "camera", "scan"):
                 if self.webcam is not None and self.classifier is not None and self.classifier.is_ready:
-                    print("Capturing frame from USB webcam...")
+                    print("Capturing frame samples from USB webcam...")
                     try:
-                        grade, conf, scores = self.webcam.snapshot_grade(self.classifier)
-                        print(f">>> WEBCAM AI RESULT: {grade.upper()} (confidence: {conf*100:.1f}%)")
-                        cmd = grade
+                        vec = self.webcam.capture_softmax(self.classifier)
+                        if vec is not None:
+                            # Map max score to grade label
+                            idx = int(max(range(len(vec)), key=lambda i: vec[i]))
+                            labels = ["bad", "good", "great"]
+                            cmd = labels[idx]
+                            print(f">>> WEBCAM AI BATCH CONSENSUS: {cmd.upper()} ({max(vec)*100:.1f}%)")
+                        else:
+                            print("Camera frame rejected (blurred or low confidence); enter grade manually:")
+                            continue
                     except Exception as exc:
                         print(f"Webcam capture error ({exc}); please enter grade manually:")
                         continue
                 elif self.classifier is not None:
-                    # Simulated prediction when webcam / tflite not attached
-                    grade, conf, scores = self.classifier.predict(None)
-                    print(f">>> WEBCAM AI (SIMULATED): {grade.upper()} (confidence: {conf*100:.1f}%)")
-                    cmd = grade
+                    # Simulated prediction when webcam not attached
+                    top_grade, conf, scores = self.classifier.predict(None)
+                    print(f">>> WEBCAM AI (SIMULATED): {top_grade.upper()} ({conf*100:.1f}%)")
+                    cmd = top_grade
                 else:
                     print("Webcam module not active. Please type 'great', 'good', or 'bad'.")
                     continue
 
             if cmd in ("great", "good", "bad"):
+                chosen_grade = cmd
+                print(f"\n1. Routing bin carriage to '{chosen_grade.upper()}' bin...")
                 try:
-                    target_stop = self.harness.move_carriage_to_grade(
-                        cmd,
+                    self.harness.move_carriage_to_grade(
+                        chosen_grade,
                         hz=self.args.carriage_hz,
                         max_steps=self.args.carriage_max_steps,
                     )
-                    self.grade_counts[cmd] += 1
-                    print(f"Recorded 1x {cmd.upper()}. Total: {self.grade_counts}")
+                    self.grade_counts[chosen_grade] = 1
+                    print(f"Carriage arrived at {chosen_grade.upper()} stop.")
                 except Exception as exc:
                     print(f"Carriage motion error: {exc}")
+
+                print("2. Running conveyor to discharge entire batch into bin...")
+                if not self.args.dry_run and self.harness.conveyor is not None:
+                    self.harness.conveyor.start(self.args.conveyor_steps * 3, self.args.conveyor_hz, forward=True)
+                    while self.harness.conveyor.busy:
+                        time.sleep(0.05)
+                else:
+                    print(f"Simulating conveyor discharge ({self.args.conveyor_steps * 3} steps)...")
+
+                self.controller.override_grade(chosen_grade)
+                self.sorting_complete = True
+                self.tick_controller()
+                break
             else:
                 print("Invalid input. Press [Enter] for webcam AI, or type 'great', 'good', 'bad', or 'done'.")
 
