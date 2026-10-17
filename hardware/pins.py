@@ -26,7 +26,7 @@ DHT22_DATA = 26     # phys 37 - 10k pull-up (check whether the breakout already 
 # otherwise the kernel claims these lines and the load cells go dead silently.
 HX711_HOPPER = HX711Pins(dout=7, sck=8)       # phys 26 / 24
 HX711_BIN_GREAT = HX711Pins(dout=9, sck=10)   # phys 21 / 19
-HX711_BIN_GOOD = HX711Pins(dout=11, sck=12)   # phys 23 / 32
+HX711_BIN_GOOD = HX711Pins(dout=15, sck=14)   # phys 10 /  8
 HX711_BIN_BAD = HX711Pins(dout=13, sck=16)    # phys 33 / 36
 
 # --- Motor drivers -----------------------------------------------------------
