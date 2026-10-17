@@ -21,10 +21,10 @@ Intake → Drying (closed-loop, static tray) → Sorting (vision-based grading)
 
 | Page | Description |
 |---|---|
-| **Dashboard** | Live overview polled every 2 s — phase track, heater/fan state, chamber and exhaust readings, exhaust absolute humidity (the drying endpoint signal), hopper weight vs. target, and active alarms |
+| **Dashboard** | Live overview polled every 2 s — phase track, heater/fan state, chamber and exhaust readings, exhaust absolute humidity (the drying endpoint signal), hopper weight vs. target, batch vision grade consensus & sample frame counts, and active alarms |
 | **Sensor Logs** | Per-batch time-series charts for chamber temperature, exhaust temperature, exhaust RH, exhaust absolute humidity and hopper weight, with peak / average / lowest; a running batch refreshes itself |
-| **Batch History** | Every batch with start time, total and drying time, weight in / out, post-sort weight loss, grade counts and final status; CSV export |
-| **Control Panel** | Operator commands — start, end drying (manual endpoint), finish sorting, reset, abort with a reason, and the target batch weight. Each is checked by the machine and its answer shown. Disabled when the supervisor is not running |
+| **Batch History** | Every batch with start time, total and drying time, weight in / out, post-sort weight loss, unified batch grade (`great`, `good`, `bad`, legacy, or review flag) with full sample frame breakdown tooltips; CSV export |
+| **Control Panel** | Operator commands — start, end drying (manual endpoint), manual bin assignment / review override (`great`, `good`, `bad`), finish sorting, reset, abort with a reason, and target batch weight. Disabled when supervisor is offline |
 
 Every page header shows the supervisor heartbeat (online / stopped / not responding), and readings from a supervisor that is not running are dimmed as last-known values.
 
@@ -49,24 +49,30 @@ Every page header shows the supervisor heartbeat (online / stopped / not respond
 CopraHeat_dashboard/
 ├── app.py                  # Flask pages + JSON API over hardware/db.py (never touches GPIO)
 ├── requirements.txt        # Python dependencies
+├── cords_model.tflite      # MobileNetV3 TFLite copra grading model
+├── labels.txt              # Model class labels: Bad (0), Good (1), Great (2)
 ├── hardware/
 │   ├── __init__.py
 │   ├── pins.py             # GPIO pin map — single source of truth (BCM numbering)
 │   ├── states.py           # BatchState / ConveyorCommand — shared vocabulary
 │   ├── batch.py            # Batch state machine: Intake → Drying → Sorting (no GPIO; unit-tested)
+│   ├── grading.py          # Batch-level ensemble sampling, soft-voting, visual contamination guard
 │   ├── climate.py          # Heater hysteresis + fan interlock logic (no GPIO; unit-tested)
 │   ├── hopper.py           # Hopper gate state machine + stable-weight filter (no GPIO; unit-tested)
 │   ├── drying.py           # Drying endpoint from exhaust absolute humidity (no GPIO; unit-tested)
+│   ├── vision.py           # USB webcam capture with Laplacian blur & confidence filters
 │   ├── sensors.py          # DS18B20 / DHT22 readers via kernel sysfs
 │   ├── gpiochip.py         # Opens the Pi 5's RP1 GPIO chip for lgpio users
 │   ├── hx711.py            # HX711 load-cell driver, bit-banged through lgpio
 │   ├── stepper.py          # TB6600 / HBS57H step+dir driver (lgpio tx_pulse)
 │   ├── limits.py           # Bin-carriage limit switches (NC, internal pull-ups)
+│   ├── carriage.py         # Bin-carriage positioning logic (MoveWatch)
 │   ├── servo.py            # MG996R on hardware PWM (rpi-hardware-pwm)
-│   ├── db.py               # SQLite data layer; also the Flask ↔ supervisor IPC
-│   ├── conveyor.py         # Conveyor interface; simulated until the stepper driver lands
+│   ├── db.py               # SQLite data layer & schema v2 migrations (Flask ↔ supervisor IPC)
+│   ├── conveyor.py         # Conveyor interface (SimulatedConveyor stand-in)
 │   ├── simulate.py         # Fake machine for --simulate runs (test fixture, not production)
 │   ├── run_cords.py        # Supervisor: the one process that owns every pin
+│   ├── walkthrough.py      # Guided interactive end-to-end testing with physical hardware/mocking
 │   ├── run_climate.py      # Bench loop: sensors → controllers → SSR / fan relay
 │   ├── run_hopper.py       # Bench loop + --calibrate: HX711 → gate logic → servo
 │   └── bench.py            # Wiring checks: steppers, limit switches, all 4 scales
@@ -76,15 +82,15 @@ CopraHeat_dashboard/
 │   │   └── style.css       # Custom design system & component styles
 │   └── js/
 │       ├── common.js       # Shared: /api/live poller, header pill + alarm bell, sendCommand()
-│       ├── dashboard.js    # Dashboard page
+│       ├── dashboard.js    # Dashboard page (live overview & grade badge)
 │       ├── sensor_logs.js  # Sensor Logs chart
 │       ├── batch_history.js# CSV export
-│       └── control_panel.js# Operator commands
+│       └── control_panel.js# Operator commands & manual grade assignment
 └── templates/
     ├── base.html           # Shared layout (sidebar nav, header, CDN links)
     ├── dashboard.html      # Live batch overview
     ├── sensor_logs.html    # Sensor time-series charts
-    ├── batch_history.html  # Batch records table
+    ├── batch_history.html  # Batch records table (with legacy & review indicators)
     └── control_panel.html  # Operator commands
 ```
 
@@ -214,13 +220,17 @@ All state lives in a SQLite database (`cords.db`, created on first run, git-igno
 |---|---|---|
 | `machine_state` | supervisor | Single-row live snapshot, including a heartbeat so the UI can tell live data from a dead process |
 | `sensor_log` | supervisor | Time series behind the Sensor Logs charts |
-| `batches` | supervisor | One row per batch — inserted at start, follows the phase while running, completed at finish |
-| `commands` | Flask | Operator queue (`start`, `end_drying`, `finish_sorting`, `abort`, `reset`, `set_target_kg`) with per-command results |
-| `settings` | supervisor | Calibration (HX711 scale/offsets, servo angles) via `--save-settings`; target weight whenever the dashboard sets it |
+| `batches` | supervisor | One row per batch — inserted at start, updated with v2 batch-level grade consensus, operator override, review flags, sample vectors, and configuration snapshot |
+| `commands` | Flask | Operator queue (`start`, `end_drying`, `override_grade`, `finish_sorting`, `abort`, `reset`, `set_target_kg`) with per-command results |
+| `settings` | supervisor | Calibration parameters (HX711 scale/offsets, servo angles, vision grading thresholds, belt travel steps) |
 
 A rejected command keeps the machine's own words (`"cannot start from drying"`), so the dashboard can show why rather than failing silently. Commands are never left waiting for a supervisor that is not there: Flask refuses them with `409`, and anything still pending when a supervisor starts is expired rather than run late.
 
-There is no migration framework. `PRAGMA user_version` guards the schema; a mismatch asks you to move the file aside.
+Schema versioning is guarded by `PRAGMA user_version = 2`. Upgrades from version 1 run automatically or via CLI:
+```bash
+python -m hardware.db backup   # Creates cords.db.bak.<timestamp>
+python -m hardware.db migrate  # Applies additive columns preserving historical data
+```
 
 **Not in `sensor_log`, deliberately:** there is no ambient column (the DHT22 sits by the exhaust, not outside), no live moisture column (moisture is not measured), and no live weight-loss column (weight loss is a post-sort figure on `batches`). The pages follow the schema: none of the three is shown as a live reading.
 
@@ -234,7 +244,7 @@ The dashboard is the operator interface for a custom copra processing machine, c
 - **Conveyor** — heat-resistant stainless steel mesh belt, driven by a 57HS82 stepper via an HBS57H driver
 - **Drying chamber** — 3× 220 V ceramic IR heater bulbs switched by a Fotek SSR, with a 60–70 °C two-point hysteresis loop on a DS18B20 probe; 24 V intake/exhaust fans switched together via a Songle relay
 - **Exhaust sensing** — DHT22 inside the chamber by the exhaust fan; its absolute humidity is the drying endpoint signal (there is no ambient sensor)
-- **Computer-vision module** — Camera Module 3 + MobileNetV3Small (`cords_model.tflite`) grading each piece as *Great*, *Good*, or *Bad*
+- **Computer-vision module** — 1080p USB webcam + MobileNetV3 (`cords_model.tflite`). During the sorting phase, the belt creeps to sample $N$ distinct positions along the batch. Consensus is calculated via soft-voting across valid frames, with a visual contamination guard forcing `Bad` if mould/char exceed threshold $\tau_{\text{bad}}$, and an operator review prompt if low confidence occurs.
 - **Bin carriage** — 57BYGH420 stepper via a TB6600 driver, moving vertically between three bin heights; three normally-closed limit switches act as hard position stops
 - **Bin load cells** — one HX711 per output bin; target weight loss during drying is ~43–47% (≈50% → ≤6% moisture)
 
