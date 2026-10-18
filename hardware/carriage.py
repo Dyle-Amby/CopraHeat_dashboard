@@ -47,21 +47,26 @@ class MoveWatch:
     `initial` is the switch state taken before the motor starts. With no
     `target` the move is a homing run: the first switch reached is the answer.
     """
-
-    def __init__(self, initial: dict[str, bool], target: str | None, order=ORDER, release_within: int = 400):
+    def __init__(self, initial: dict[str, bool], target: str | None, order=ORDER,
+                 release_within: int = 400, up: bool | None = None):
         self.order = order
         self.target = target
         self.start = located_at(initial)
         self.release_within = release_within
         self._prev = initial
         self._released = self.start is None
+        self.passable = set()
         if target is not None:
+            t = order.index(target)
             if self.start is not None:
-                lo, hi = sorted((order.index(self.start), order.index(target)))
+                lo, hi = sorted((order.index(self.start), t))
                 self.passable = set(order[lo + 1:hi])
+            elif up is True:
+                self.passable = set(order[:t])         # coming from below
+            elif up is False:
+                self.passable = set(order[t + 1:])     # coming from above
             else:
-                # If started between stops, all switches on the way to target are passable
-                self.passable = set(order[:order.index(target)])
+                self.passable = set(order) - {target}  # direction unknown
 
     def update(self, state: dict[str, bool], steps_sent: int) -> tuple[str, str | None]:
         """(MOVING, None), (ARRIVED, switch) or (FAULT, message)."""

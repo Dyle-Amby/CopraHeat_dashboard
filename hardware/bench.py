@@ -19,13 +19,14 @@ Start slow (the default --hz 400) and raise it once direction and wiring are
 confirmed. The hopper cell's calibration lives in run_hopper --calibrate, since
 it needs the gate's two tare offsets.
 """
-
 import argparse
+import json
 import signal
 import sys
 import time
 from collections import deque
 from datetime import datetime
+from pathlib import Path
 
 from hardware import carriage, pins
 from hardware.limits import SWITCHES, newly_triggered
@@ -47,7 +48,19 @@ CELLS = {
     "good": pins.HX711_BIN_GOOD,
     "bad": pins.HX711_BIN_BAD,
 }
+STATE_FILE = Path(__file__).with_name(".carriage_state.json")
 
+
+def load_state() -> dict | None:
+    try:
+        return json.loads(STATE_FILE.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def save_state(stop: str, leaving_up: bool | None) -> None:
+    """leaving_up: True/False while a move is in progress, None once arrived."""
+    STATE_FILE.write_text(json.dumps({"stop": stop, "leaving_up": leaving_up}))
 
 def stamp() -> str:
     return f"{datetime.now():%H:%M:%S}"
@@ -183,7 +196,7 @@ def jog(args: argparse.Namespace) -> None:
 def carriage_move(stepper, ls, target: str | None, up: bool, limit: int,
                   args: argparse.Namespace) -> tuple[str, int]:
     """Run the carriage until MoveWatch says it arrived; returns (switch it is on, steps sent)."""
-    watch = carriage.MoveWatch(ls.read(), target, args.order, args.release_within)
+    watch = carriage.MoveWatch(ls.read(), target, args.order, args.release_within, up=up)
     t0 = time.monotonic()
     status, detail = carriage.MOVING, None
     stepper.start(limit, args.hz, forward=up)
@@ -225,15 +238,24 @@ def sort(args: argparse.Namespace) -> None:
 
         here = carriage.located_at(ls.read())
         if here is None:
-            if first_target is not None:
-                # If a specific grade was requested, head straight for it; pass intermediate switches
-                print(f"{stamp()}  carriage between stops: moving directly to {first_target}")
-                here, _ = carriage_move(stepper, ls, first_target, True, args.max_steps, args)
+            state = load_state()
+            if first_target is not None and state and state["stop"] in args.order:
+                last = state["stop"]
+                if last != first_target:
+                    up = carriage.moving_up(last, first_target, args.order)
+                elif state["leaving_up"] is not None:
+                    up = not state["leaving_up"]
+                else:
+                    up = False
+                print(f"{stamp()}  carriage between stops (last at {last}): "
+                      f"moving {'up' if up else 'down'} to {first_target}")
+                here, _ = carriage_move(stepper, ls, first_target, up, args.max_steps, args)
             else:
-                print(f"{stamp()}  carriage between stops: homing to nearest switch")
+                print(f"{stamp()}  carriage between stops, position unknown: homing down to nearest switch")
                 here, _ = carriage_move(stepper, ls, None, False, args.max_steps, args)
         else:
             print(f"{stamp()}  carriage resting at {here}")
+        save_state(here, None)
 
         grades_iter = iter(grades) if grades else _prompt_grades(grade_stop)
         for grade in grades_iter:
@@ -251,7 +273,9 @@ def sort(args: argparse.Namespace) -> None:
                     limit = min(limit, int(travel[pair] * 1.5) + args.release_within)
                 print(f"{stamp()}  {grade} -> {target}")
                 up = carriage.moving_up(here, target, args.order)
+                save_state(here, up)
                 here, sent = carriage_move(stepper, ls, target, up, limit, args)
+                save_state(here, None)
                 travel[pair] = max(travel.get(pair, 0), sent)
             if args.grades:
                 time.sleep(args.pause)
@@ -264,7 +288,7 @@ def sort(args: argparse.Namespace) -> None:
 
 def _prompt_grades(grade_stop: dict[str, str]):
     while True:
-        try:
+         ry:
             line = input(f"grade ({' / '.join(grade_stop)}, q to quit)> ").strip().lower()
         except EOFError:
             return
