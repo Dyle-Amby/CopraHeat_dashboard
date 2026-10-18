@@ -23,7 +23,7 @@ _FINISHED = (BatchState.COMPLETE, BatchState.ABORTED)
 # The operator vocabulary, kept next to the methods it maps to. The data layer
 # validates against it and the supervisor dispatches with apply_command().
 COMMAND_NAMES = frozenset(
-    {"start", "end_drying", "finish_sorting", "abort", "reset", "set_target_kg", "override_grade"}
+    {"start", "skip_intake", "end_drying", "finish_sorting", "abort", "reset", "set_target_kg", "override_grade"}
 )
 
 
@@ -100,6 +100,9 @@ def apply_command(controller: "BatchController", name: str, payload: str | None 
     if name == "start":
         controller.start()
         return "batch will start on the next tick"
+    if name == "skip_intake":
+        controller.skip_intake()
+        return "skipping intake: moving to drying on the next tick"
     if name == "end_drying":
         controller.end_drying()
         return "drying will end on the next tick"
@@ -178,6 +181,12 @@ class BatchController:
         if self.state is not BatchState.IDLE:
             raise RuntimeError(f"cannot start from {self.state.value}")
         self._start_requested = True
+
+    def skip_intake(self) -> None:
+        """Manual intake override to skip dispensing and conveyor advance, moving directly to drying."""
+        if self.state is not BatchState.INTAKE:
+            raise RuntimeError(f"not in intake (state is {self.state.value})")
+        self._skip_intake_requested = True
 
     def end_drying(self) -> None:
         """Manual endpoint override. The absolute-humidity thresholds stay
@@ -301,6 +310,17 @@ class BatchController:
     # --- per-state handling --------------------------------------------------
 
     def _intake(self, i: Inputs) -> tuple[bool, ConveyorCommand]:
+        if self._skip_intake_requested:
+            self._skip_intake_requested = False
+            self._dispensed = True
+            if self.weight_in_kg is None:
+                self.weight_in_kg = self.gate.stable_kg or i.hopper_kg or self.target_kg
+            self._alarms.discard("intake_stall")
+            self._alarms.discard("hopper_jam")
+            self._alarms.discard("conveyor_stall")
+            self._to(BatchState.DRYING, i.now)
+            return False, ConveyorCommand.STOP
+
         if not self._dispensed:
             was_open = self.gate.gate_open
             gate_open = self.gate.update(i.hopper_kg, i.now)
@@ -436,6 +456,7 @@ class BatchController:
         self._advance_started = now
         self._drying_started: float | None = None
         self._start_requested = False
+        self._skip_intake_requested = False
         self._end_drying_requested = False
         self._finish_sorting_requested = False
         self._abort_requested: str | None = None

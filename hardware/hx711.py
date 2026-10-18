@@ -25,8 +25,19 @@ def decode_24bit(raw: int) -> int | None:
     return raw - (1 << 24) if raw & 0x800000 else raw
 
 
+DEFAULT_SCALE = 21500.0
+
+
+def raw_to_kg(raw: int | None, offset: int = 0, scale: float = DEFAULT_SCALE) -> float | None:
+    """Convert raw ADC counts to kilograms using calibration offset and scale factor."""
+    if raw is None:
+        return None
+    s = scale if (scale is not None and scale != 0 and scale != 1.0) else DEFAULT_SCALE
+    return (raw - offset) / s
+
+
 class HX711:
-    def __init__(self, dout: int, sck: int, offset: int = 0, scale: float = 1.0):
+    def __init__(self, dout: int, sck: int, offset: int = 0, scale: float = DEFAULT_SCALE):
         import lgpio
 
         self._lgpio = lgpio
@@ -34,7 +45,7 @@ class HX711:
         self.dout = dout
         self.sck = sck
         self.offset = offset      # raw counts at zero load
-        self.scale = scale        # raw counts per kg
+        self.scale = scale if (scale is not None and scale != 0 and scale != 1.0) else DEFAULT_SCALE  # raw counts per kg
         # why the last read_raw() returned None: "timeout" = DOUT never went low
         # (power, DOUT or SCK wiring); "railed" = ADC pinned at full scale (the
         # load-cell side: E+/E-/A+/A- open or swapped)
@@ -69,7 +80,8 @@ class HX711:
         raw = self.read_raw()
         if raw is None:
             return None
-        return (raw - (self.offset if offset is None else offset)) / self.scale
+        target_offset = self.offset if offset is None else offset
+        return raw_to_kg(raw, offset=target_offset, scale=self.scale)
 
     def tare(self, samples: int = 15) -> int | None:
         """Measure and return the raw zero-load offset without changing self.offset."""

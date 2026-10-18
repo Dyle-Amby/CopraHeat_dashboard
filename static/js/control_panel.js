@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', function () {
   const ALLOWED = {
     start: ['idle'],
     set_target_kg: ['idle', 'intake'],
+    skip_intake: ['intake'],
     end_drying: ['drying'],
     override_grade: ['sorting'],
     finish_sorting: ['sorting'],
