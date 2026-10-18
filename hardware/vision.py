@@ -56,7 +56,7 @@ class CopraClassifier:
 
     def _load_interpreter(self) -> None:
         try:
-            import tflite_runtime.interpreter as tflite
+            import ai_edge_litert.interpreter as tflite
 
             self.interpreter = tflite.Interpreter(model_path=str(self.model_path))
         except ImportError:
