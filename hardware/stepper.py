@@ -73,7 +73,7 @@ class Stepper:
         return sent
 
     def stop(self):
-    # If you started with tx_pwm (continuous):
-    self._lgpio.tx_pwm(self._h, self.pins.pul, 0, 0)   # frequency 0 = stop
-    # Make sure the line idles low:
-    self._lgpio.gpio_write(self._h, self.pins.pul, 0)
+        # If you started with tx_pwm (continuous):
+        self._lgpio.tx_pwm(self._h, self.pins.pul, 0, 0)   # frequency 0 = stop
+        # Make sure the line idles low:
+        self._lgpio.gpio_write(self._h, self.pins.pul, 0)
