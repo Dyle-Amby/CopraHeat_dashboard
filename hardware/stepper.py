@@ -45,6 +45,7 @@ class Stepper:
         self._started: float | None = None
         self._hz = 0.0
         self._steps = 0
+        self._closed = False
         lgpio.gpio_claim_output(self._h, pins.pul, 0)
         lgpio.gpio_claim_output(self._h, pins.dir, 0)
 
@@ -72,8 +73,22 @@ class Stepper:
         self._started = None
         return sent
 
-    def stop(self):
-        # If you started with tx_pwm (continuous):
-        self._lgpio.tx_pwm(self._h, self.pins.pul, 0, 0)   # frequency 0 = stop
-        # Make sure the line idles low:
-        self._lgpio.gpio_write(self._h, self.pins.pul, 0)
+    def close(self) -> None:
+        """Stop any move and release the pins and chip handle. Safe to call twice."""
+        if self._closed:
+            return
+        self._closed = True
+        g = self._lgpio
+        try:
+            self.stop()
+        except Exception:
+            pass
+        for pin in (self.pins.pul, self.pins.dir):
+            try:
+                g.gpio_free(self._h, pin)
+            except Exception:
+                pass
+        try:
+            g.gpiochip_close(self._h)
+        except Exception:
+            pass
