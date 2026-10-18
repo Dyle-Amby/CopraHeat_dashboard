@@ -288,14 +288,10 @@ def sort(args: argparse.Namespace) -> None:
 
 def _prompt_grades(grade_stop: dict[str, str]):
     while True:
-         ry:
+        try:
             line = input(f"grade ({' / '.join(grade_stop)}, q to quit)> ").strip().lower()
         except EOFError:
             return
-        if line in ("q", "quit", "exit"):
-            return
-        if line:
-            yield line
 
 
 def watch_scales(args: argparse.Namespace) -> None:
