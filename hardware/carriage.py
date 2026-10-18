@@ -14,9 +14,9 @@ fabricated machine.
 from hardware.limits import newly_triggered
 
 # limit switches from the bottom of the carriage's travel to the top
-ORDER = ("LS1", "LS2", "LS3")
+ORDER = ("LS3", "LS2", "LS1")  # the switch at each stop, bottom-to-top order
 # grade whose bin sits at each of those stops, same bottom-to-top order
-BINS = ("great", "good", "bad")
+BINS = ("bad", "good", "great")
 
 MOVING, ARRIVED, FAULT = "moving", "arrived", "fault"
 
