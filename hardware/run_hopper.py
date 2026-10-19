@@ -43,6 +43,12 @@ def calibrate(args: argparse.Namespace) -> None:
         kg = float(input("Place a known weight on the gate and enter its mass in kg: "))
         raw = hx.read_raw_median(30)
         scale = (raw - offset_closed) / kg
+        if scale == 0:
+            raise SystemExit(
+                "Calibration failed: reading with weight (%d) equals the tare (%d). "
+                "Check that the weight is on the load cell and the HX711 wiring."
+                % (raw, offset_closed)
+            )
         print(f"  raw = {raw}  ->  scale = {scale:.1f} counts/kg")
 
         input("Remove the weight. Press Enter to open the gate and tare in the open position... ")
