@@ -22,8 +22,8 @@ from hardware.hopper import HopperGate
 
 
 def add_hardware_args(ap: argparse.ArgumentParser) -> None:
-    ap.add_argument("--closed-angle", type=float, default=0.0)
-    ap.add_argument("--open-angle", type=float, default=90.0)
+    ap.add_argument("--closed-angle", type=float, default=180.0)
+    ap.add_argument("--open-angle", type=float, default=0.0)
     ap.add_argument("--pwm-chip", type=int, default=2)
     ap.add_argument("--pwm-channel", type=int, default=2)
 
