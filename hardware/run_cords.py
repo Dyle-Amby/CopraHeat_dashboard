@@ -159,6 +159,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     gcal.add_argument("--intake-advance-timeout-s", type=float, default=None,
                       help="hard timeout for the intake conveyor advance (seconds); must be > conveyor_ack_s")
 
+    fcal = ap.add_argument_group("fan airflow configuration")
+    fcal.add_argument("--fan-warmup-s", type=float, default=None, help="fans off duration in DRYING before pulses (s)")
+    fcal.add_argument("--fan-pulse-on-s", type=float, default=None, help="fan pulse on duration (s)")
+    fcal.add_argument("--fan-pulse-period-s", type=float, default=None, help="fan pulse period (s)")
+    fcal.add_argument("--fan-rh-on", type=float, default=None, help="exhaust RH high threshold to force fans on")
+    fcal.add_argument("--fan-rh-off", type=float, default=None, help="exhaust RH low threshold to allow fans off")
+
     args = ap.parse_args(argv)
 
     if args.simulate:
@@ -206,6 +213,12 @@ SETTING_FLAGS = {
     "carriage_move_timeout_s": ("carriage_move_timeout_s", float),
     "hopper_to_chamber_steps": ("hopper_to_chamber_steps", int),
     "intake_advance_timeout_s": ("intake_advance_timeout_s", float),
+    # Fan airflow
+    "fan_warmup_s": ("fan_warmup_s", float),
+    "fan_pulse_on_s": ("fan_pulse_on_s", float),
+    "fan_pulse_period_s": ("fan_pulse_period_s", float),
+    "fan_rh_on": ("fan_rh_on", float),
+    "fan_rh_off": ("fan_rh_off", float),
 }
 
 
@@ -255,10 +268,25 @@ def main(argv: list[str] | None = None) -> None:
             print(f"expired {expired} command(s) queued while no supervisor was running")
     overrides = resolve_settings(args, conn)
 
+    from hardware.climate import FanController
+
+    fan_kwargs = {}
+    if args.fan_warmup_s is not None:
+        fan_kwargs["warmup_s"] = args.fan_warmup_s
+    if args.fan_pulse_on_s is not None:
+        fan_kwargs["pulse_on_s"] = args.fan_pulse_on_s
+    if args.fan_pulse_period_s is not None:
+        fan_kwargs["pulse_period_s"] = args.fan_pulse_period_s
+    if args.fan_rh_on is not None:
+        fan_kwargs["rh_on"] = args.fan_rh_on
+    if args.fan_rh_off is not None:
+        fan_kwargs["rh_off"] = args.fan_rh_off
+
     controller = BatchController(
         target_kg=args.target_kg,
         intake_advance_timeout_s=args.intake_advance_timeout_s
             if args.intake_advance_timeout_s is not None else 30.0,
+        fans=FanController(**fan_kwargs),
     )
     conveyor = SimulatedConveyor(args.intake_advance_s)
     cache = None if args.simulate else SensorCache()
@@ -473,6 +501,7 @@ def main(argv: list[str] | None = None) -> None:
                     gate_open=commands.gate_open,
                     conveyor=commands.conveyor,
                     alarms=frozenset(active_alarms),
+                    fan_reason=commands.fan_reason,
                     sorting_stage=commands.sorting_stage,
                     carriage_target=commands.carriage_target,
                 )
@@ -513,6 +542,7 @@ def main(argv: list[str] | None = None) -> None:
                     chamber_c=chamber, exhaust_c=exhaust_t, exhaust_rh=exhaust_rh,
                     exhaust_ah=exhaust_ah, hopper_kg=hopper_kg,
                     heater_on=commands.heater_on, fans_on=commands.fans_on,
+                    fan_reason=commands.fan_reason,
                 )
                 # the heartbeat is wall-clock, so it is throttled on real time
                 if state_changed or real - last_live >= args.live_interval:
@@ -547,7 +577,7 @@ def main(argv: list[str] | None = None) -> None:
                     f"exhaust={fmt(exhaust_t):>7} {fmt(exhaust_rh, '%'):>6} "
                     f"hopper={fmt(hopper_kg, 'kg'):>8} "
                     f"heater={'ON ' if commands.heater_on else 'off'} "
-                    f"fans={'ON ' if commands.fans_on else 'off'} "
+                    f"fans={'ON ' if commands.fans_on else 'off'} ({commands.fan_reason}) "
                     f"gate={'OPEN  ' if commands.gate_open else 'closed'} "
                     f"belt={commands.conveyor.value}"
                 )

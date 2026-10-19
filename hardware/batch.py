@@ -58,6 +58,7 @@ class Commands:
     gate_open: bool
     conveyor: ConveyorCommand
     alarms: frozenset[str]
+    fan_reason: str = "off"
     sorting_stage: str | None = None        # "sample" | "await_review" | "discharge" | None
     carriage_target: str | None = None      # "great" | "good" | "bad" | None
 
@@ -300,7 +301,7 @@ class BatchController:
         # run the climate controllers on the state we just landed in, so a
         # transition takes effect on this tick rather than the next one
         heater_on = self.heater.update(self.state, i.chamber_temp)
-        fans_on = self.fans.update(self.state, i.chamber_temp, now)
+        fans_on = self.fans.update(self.state, i.chamber_temp, now, i.exhaust_rh)
         self._set_alarm("overtemp", self.fans.overtemp_active)
 
         return Commands(
@@ -310,6 +311,7 @@ class BatchController:
             gate_open=gate_open,
             conveyor=conveyor,
             alarms=frozenset(self._alarms),
+            fan_reason=self.fans.reason,
             sorting_stage=sorting_stage,
             carriage_target=carriage_target,
         )

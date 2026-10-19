@@ -54,7 +54,7 @@ def main() -> None:
             exhaust_t, exhaust_rh = sensors.read_dht22()
 
             heater_on = heater.update(state, chamber)
-            fans_on = fans.update(state, chamber, now)
+            fans_on = fans.update(state, chamber, now, exhaust_rh)
 
             if heater_out is not None:
                 heater_out.value = heater_on
@@ -64,7 +64,7 @@ def main() -> None:
             print(
                 f"{datetime.now():%H:%M:%S}  chamber={fmt(chamber):>7}  "
                 f"exhaust={fmt(exhaust_t):>7} {fmt(exhaust_rh, '%'):>6}  "
-                f"heater={'ON ' if heater_on else 'off'}  fans={'ON ' if fans_on else 'off'}{flags}"
+                f"heater={'ON ' if heater_on else 'off'}  fans={'ON ' if fans_on else 'off'} ({fans.reason}){flags}"
             )
             time.sleep(args.interval)
     except (KeyboardInterrupt, SystemExit):

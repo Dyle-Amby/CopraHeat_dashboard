@@ -36,7 +36,7 @@ class DryingEndpoint:
     def __init__(
         self,
         min_time_s: float = 30 * 60,
-        max_time_s: float = 10 * 3600,
+        max_time_s: float = 8 * 3600,
         window_s: float = 10 * 60,
         flat_slope: float = 0.05,        # g/m^3 per minute; falling slower than this counts as flat
         recovery_fraction: float = 0.8,  # AH must have given back this much of its rise above the start level

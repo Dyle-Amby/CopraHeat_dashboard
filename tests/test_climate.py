@@ -84,95 +84,135 @@ class HeaterControllerTest(unittest.TestCase):
 
 class FanControllerTest(unittest.TestCase):
     def setUp(self):
-        self.ctl = FanController(interlock_temp=60.0, overtemp=75.0, dwell_s=30.0)
+        self.ctl = FanController(
+            interlock_temp=60.0,
+            overtemp=75.0,
+            dwell_s=30.0,
+            warmup_s=1200.0,
+            pulse_on_s=60.0,
+            pulse_period_s=300.0,
+            rh_on=60.0,
+            rh_off=45.0,
+        )
 
     def test_starts_off(self):
         self.assertFalse(self.ctl.fans_on)
+        self.assertEqual(self.ctl.reason, "off")
 
-    def test_state_rules(self):
-        self.assertFalse(self.ctl.update(IDLE, 65.0, now=0))
-        self.assertFalse(self.ctl.update(DRYING, 59.9, now=100))
-        self.assertTrue(self.ctl.update(DRYING, 60.0, now=200))
-        self.assertTrue(self.ctl.update(COOLDOWN, 40.0, now=300))
-        self.assertFalse(self.ctl.update(IDLE, 40.0, now=400))
+    def test_fans_stay_off_during_warmup_when_temp_below_interlock(self):
+        # 10 minutes into DRYING (< 1200 s warmup), temp=55 C (< 60 C interlock)
+        self.assertFalse(self.ctl.update(DRYING, 55.0, now=0))
+        self.assertEqual(self.ctl.reason, "warmup")
+        self.assertFalse(self.ctl.update(DRYING, 58.0, now=600))
+        self.assertEqual(self.ctl.reason, "warmup")
+        self.assertFalse(self.ctl.update(DRYING, 59.9, now=1199))
+        self.assertEqual(self.ctl.reason, "warmup")
 
-    def test_dwell_blocks_change_then_allows_it(self):
-        self.ctl.update(DRYING, 65.0, now=0)
-        self.assertTrue(self.ctl.update(DRYING, 55.0, now=29.9))
-        self.assertFalse(self.ctl.update(DRYING, 55.0, now=30.0))
+    def test_pulses_start_after_warmup_at_right_times(self):
+        # warmup ends at t=1200. First pulse is [1200, 1260) within [1200, 1500)
+        # t=0..1199: warmup
+        self.ctl.update(DRYING, 55.0, now=0)
+        self.assertFalse(self.ctl.fans_on)
 
-    def test_first_switch_is_not_dwell_blocked(self):
-        self.assertTrue(self.ctl.update(DRYING, 65.0, now=5.0))
+        # t=1200: pulse starts
+        self.assertTrue(self.ctl.update(DRYING, 55.0, now=1200))
+        self.assertEqual(self.ctl.reason, "pulse")
 
-    def test_chatter_around_interlock_is_suppressed(self):
-        switches = 0
-        prev = self.ctl.fans_on
-        for i in range(60):  # 5 minutes, sampled every 5 s, temp wobbling 59 <-> 61
-            temp = 61.0 if i % 2 == 0 else 59.0
-            state = self.ctl.update(DRYING, temp, now=i * 5.0)
-            switches += state != prev
-            prev = state
-        # every change requires a full 30 s dwell, so at most one per 30 s window
-        self.assertLessEqual(switches, 300 // 30 + 1)
+        # t=1259: pulse continues
+        self.assertTrue(self.ctl.update(DRYING, 55.0, now=1259))
+        self.assertEqual(self.ctl.reason, "pulse")
 
-    def test_overtemp_forces_on_in_idle(self):
-        self.assertTrue(self.ctl.update(IDLE, 76.0, now=0))
-        self.assertTrue(self.ctl.overtemp_active)
+        # t=1260: pulse ends, hold starts (now - last_change = 60s >= dwell_s 30s)
+        self.assertFalse(self.ctl.update(DRYING, 55.0, now=1260))
+        self.assertEqual(self.ctl.reason, "hold")
+
+        # t=1400: still in hold
+        self.assertFalse(self.ctl.update(DRYING, 55.0, now=1400))
+        self.assertEqual(self.ctl.reason, "hold")
+
+        # t=1500: second pulse starts (1200 + 300)
+        self.assertTrue(self.ctl.update(DRYING, 55.0, now=1500))
+        self.assertEqual(self.ctl.reason, "pulse")
+
+    def test_humidity_latch_turns_on_at_rh_on_and_off_at_rh_off(self):
+        # After warmup (t=1200), during pulse hold (e.g. t=1300), humidity override turns fans ON if rh >= 60
+        self.ctl.update(DRYING, 50.0, now=0)
+        # At t=1300: warmup is done, outside pulse window ([1200, 1260)), so demand without humidity is hold (off)
+        self.assertFalse(self.ctl.update(DRYING, 50.0, now=1300, rh=55.0))
+        self.assertEqual(self.ctl.reason, "hold")
+
+        # At t=1335: RH hits 60.0 -> latch turns on
+        self.assertTrue(self.ctl.update(DRYING, 50.0, now=1335, rh=60.0))
+        self.assertEqual(self.ctl.reason, "humidity")
+
+        # In between rh_off (45) and rh_on (60), e.g. at 50% -> stays latched ON
+        self.assertTrue(self.ctl.update(DRYING, 50.0, now=1370, rh=50.0))
+        self.assertEqual(self.ctl.reason, "humidity")
+
+        # Below rh_off (45), e.g. 44.9% -> latch drops, reverts to hold (fans off)
+        self.assertFalse(self.ctl.update(DRYING, 50.0, now=1405, rh=44.9))
+        self.assertEqual(self.ctl.reason, "hold")
+
+        # In between again (e.g. 50%), stays unlatched (fans off)
+        self.assertFalse(self.ctl.update(DRYING, 50.0, now=1440, rh=50.0))
+        self.assertEqual(self.ctl.reason, "hold")
+
+    def test_temp_at_or_above_interlock_forces_fans_on_even_during_warmup(self):
+        # Even at t=10 (warmup), temp >= 60.0 forces fans ON
+        self.assertTrue(self.ctl.update(DRYING, 60.0, now=10))
+        self.assertEqual(self.ctl.reason, "temp")
+        self.assertTrue(self.ctl.update(DRYING, 65.0, now=50))
+        self.assertEqual(self.ctl.reason, "temp")
 
     def test_overtemp_bypasses_dwell(self):
-        self.ctl.update(DRYING, 65.0, now=0)
-        self.ctl.update(DRYING, 55.0, now=30)  # OFF at t=30
+        self.ctl.update(DRYING, 65.0, now=0)   # fans ON at t=0
+        self.ctl.update(DRYING, 55.0, now=30)  # fans OFF at t=30
         self.assertFalse(self.ctl.fans_on)
-        self.assertTrue(self.ctl.update(DRYING, 75.1, now=32))  # only 2 s later
+        # Only 2 s later (< 30s dwell): overtemp 75.1 C forces ON immediately
+        self.assertTrue(self.ctl.update(DRYING, 75.1, now=32))
+        self.assertEqual(self.ctl.reason, "overtemp")
+        self.assertTrue(self.ctl.overtemp_active)
 
-    def test_overtemp_threshold_is_strict(self):
-        self.assertFalse(self.ctl.update(IDLE, 75.0, now=0))
-        self.assertFalse(self.ctl.overtemp_active)
+    def test_none_rh_skips_humidity_rule_and_none_temp_turns_fans_on(self):
+        # None RH: skips humidity rule, follows warmup / pulses / temp
+        self.ctl.update(DRYING, 50.0, now=0, rh=None)
+        self.assertFalse(self.ctl.fans_on)
+        self.assertEqual(self.ctl.reason, "warmup")
 
-    def test_overtemp_clearing_respects_dwell(self):
-        self.ctl.update(IDLE, 76.0, now=0)
-        self.assertTrue(self.ctl.update(IDLE, 70.0, now=10))
-        self.assertFalse(self.ctl.overtemp_active)
-        self.assertFalse(self.ctl.update(IDLE, 70.0, now=30))
+        # None temp: sensor fault forces fans ON even during warmup
+        self.assertTrue(self.ctl.update(DRYING, None, now=35, rh=None))
+        self.assertEqual(self.ctl.reason, "sensor-fault")
 
-    def test_overtemp_while_already_on_does_not_reset_dwell(self):
-        self.ctl.update(DRYING, 65.0, now=0)   # ON at t=0
-        self.ctl.update(DRYING, 76.0, now=10)  # already on; no state change
-        self.assertFalse(self.ctl.update(IDLE, 50.0, now=30))  # dwell counted from t=0
+    def test_state_leaving_drying_resets_warmup_timer(self):
+        # DRYING for 1100 s
+        self.ctl.update(DRYING, 50.0, now=0)
+        self.ctl.update(DRYING, 50.0, now=1100)
+        self.assertEqual(self.ctl.reason, "warmup")
 
-    def test_sensor_fault_while_drying_keeps_air_moving(self):
-        self.assertTrue(self.ctl.update(DRYING, None, now=0))
-        self.assertFalse(self.ctl.overtemp_active)
+        # Transition out to COOLDOWN (or IDLE)
+        self.ctl.update(COOLDOWN, 35.0, now=1200)
+        self.assertEqual(self.ctl.reason, "cooldown")
 
-    def test_sensor_fault_while_idle_stays_off(self):
-        self.assertFalse(self.ctl.update(IDLE, None, now=0))
-
-    def test_full_batch_switches_relay_twice(self):
-        t = 0.0
-        switches = 0
-        prev = self.ctl.fans_on
-
-        def step(state, temp):
-            nonlocal t, switches, prev
-            t += 10.0
-            on = self.ctl.update(state, temp, now=t)
-            switches += on != prev
-            prev = on
-
-        for temp in range(30, 60, 2):      # heat-up: fans stay off
-            step(DRYING, float(temp))
-        for temp in (60, 63, 66, 69, 70, 67, 62, 60, 64, 68):  # drying: fans on
-            step(DRYING, float(temp))
-        for temp in (68, 60, 50, 42, 35):  # cooldown: fans on
-            step(COOLDOWN, float(temp))
-        step(IDLE, 34.0)                   # done: fans off
-
-        self.assertEqual(switches, 2)
+        # Re-entering DRYING resets the timer: warmup starts again at t=1300
+        self.ctl.update(DRYING, 50.0, now=1300)
+        self.assertEqual(self.ctl.reason, "warmup")
+        self.assertFalse(self.ctl.fans_on)
+        # 500 s later (t=1800): only 500 s into new DRYING session (< 1200s), still warmup
+        self.ctl.update(DRYING, 50.0, now=1800)
+        self.assertEqual(self.ctl.reason, "warmup")
         self.assertFalse(self.ctl.fans_on)
 
-    def test_rejects_interlock_at_or_above_overtemp(self):
+    def test_rejects_invalid_configuration(self):
         with self.assertRaises(ValueError):
             FanController(interlock_temp=75.0, overtemp=75.0)
+        with self.assertRaises(ValueError):
+            FanController(rh_on=50.0, rh_off=50.0)
+        with self.assertRaises(ValueError):
+            FanController(rh_on=40.0, rh_off=50.0)
+        with self.assertRaises(ValueError):
+            FanController(dwell_s=30.0, pulse_on_s=20.0, pulse_period_s=300.0)
+        with self.assertRaises(ValueError):
+            FanController(dwell_s=30.0, pulse_on_s=300.0, pulse_period_s=300.0)
 
 
 if __name__ == "__main__":

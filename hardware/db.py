@@ -67,6 +67,12 @@ DEFAULT_SETTINGS = {
     # then save with: python -m hardware.run_cords --save-settings --hopper-to-chamber-steps <N>
     "hopper_to_chamber_steps": "0",
     "intake_advance_timeout_s": "30.0",
+    # Fan pulse & warm-up airflow configuration
+    "fan_warmup_s": "1200.0",
+    "fan_pulse_on_s": "60.0",
+    "fan_pulse_period_s": "300.0",
+    "fan_rh_on": "60.0",
+    "fan_rh_off": "45.0",
 }
 
 SCHEMA = """
@@ -115,7 +121,8 @@ CREATE TABLE IF NOT EXISTS sensor_log (
     exhaust_ah REAL,
     hopper_kg  REAL,
     heater_on  INTEGER NOT NULL DEFAULT 0,
-    fans_on    INTEGER NOT NULL DEFAULT 0
+    fans_on    INTEGER NOT NULL DEFAULT 0,
+    fan_reason TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_sensor_log_batch ON sensor_log(batch_id, id);
 
@@ -145,6 +152,7 @@ CREATE TABLE IF NOT EXISTS machine_state (
     target_kg      REAL,
     heater_on      INTEGER NOT NULL DEFAULT 0,
     fans_on        INTEGER NOT NULL DEFAULT 0,
+    fan_reason     TEXT,
     gate_open      INTEGER NOT NULL DEFAULT 0,
     conveyor       TEXT,
     alarms         TEXT
@@ -210,6 +218,20 @@ def migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA user_version = 2")
 
 
+def _ensure_fan_reason_columns(conn: sqlite3.Connection) -> None:
+    """Add fan_reason column to sensor_log and machine_state if missing."""
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(sensor_log)")
+    s_cols = [row[1] for row in cur.fetchall()]
+    if s_cols and "fan_reason" not in s_cols:
+        cur.execute("ALTER TABLE sensor_log ADD COLUMN fan_reason TEXT")
+
+    cur.execute("PRAGMA table_info(machine_state)")
+    m_cols = [row[1] for row in cur.fetchall()]
+    if m_cols and "fan_reason" not in m_cols:
+        cur.execute("ALTER TABLE machine_state ADD COLUMN fan_reason TEXT")
+
+
 def init(conn: sqlite3.Connection) -> None:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version == 1:
@@ -220,6 +242,7 @@ def init(conn: sqlite3.Connection) -> None:
             "There are no migrations for this version -- move the file aside or run backup."
         )
     conn.executescript(SCHEMA)
+    _ensure_fan_reason_columns(conn)
     conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     stamp = now_iso()
     conn.executemany(
@@ -328,15 +351,17 @@ def log_sample(
     hopper_kg: float | None = None,
     heater_on: bool = False,
     fans_on: bool = False,
+    fan_reason: str | None = None,
 ) -> None:
     conn.execute(
         """INSERT INTO sensor_log
                (batch_id, ts, elapsed_s, state, chamber_c, exhaust_c, exhaust_rh,
-                exhaust_ah, hopper_kg, heater_on, fans_on)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                exhaust_ah, hopper_kg, heater_on, fans_on, fan_reason)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             batch_id, now_iso(), elapsed_s, state, chamber_c, exhaust_c,
             exhaust_rh, exhaust_ah, hopper_kg, int(heater_on), int(fans_on),
+            fan_reason,
         ),
     )
 
@@ -356,6 +381,7 @@ def update_live(
     target_kg: float | None = None,
     heater_on: bool = False,
     fans_on: bool = False,
+    fan_reason: str | None = None,
     gate_open: bool = False,
     conveyor: str | None = None,
     alarms: frozenset[str] | list[str] | None = None,
@@ -366,12 +392,12 @@ def update_live(
         """INSERT OR REPLACE INTO machine_state
                (id, updated_at, supervisor_pid, batch_id, state, elapsed_s,
                 chamber_c, exhaust_c, exhaust_rh, exhaust_ah, hopper_kg, target_kg,
-                heater_on, fans_on, gate_open, conveyor, alarms)
-           VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                heater_on, fans_on, fan_reason, gate_open, conveyor, alarms)
+           VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             now_iso(), supervisor_pid, batch_id, state, elapsed_s,
             chamber_c, exhaust_c, exhaust_rh, exhaust_ah, hopper_kg, target_kg,
-            int(heater_on), int(fans_on), int(gate_open), conveyor,
+            int(heater_on), int(fans_on), fan_reason, int(gate_open), conveyor,
             json.dumps(sorted(alarms or [])),
         ),
     )
