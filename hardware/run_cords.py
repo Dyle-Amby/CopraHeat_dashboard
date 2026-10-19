@@ -154,6 +154,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     gcal.add_argument("--safety-margin-steps", type=int, default=None, help="buffer before discharge edge")
     gcal.add_argument("--discharge-timeout-s", type=float, default=None, help="discharge timeout in seconds")
     gcal.add_argument("--carriage-move-timeout-s", type=float, default=None, help="carriage reposition timeout in seconds")
+    gcal.add_argument("--hopper-to-chamber-steps", type=int, default=None,
+                      help="steps from hopper drop-off to chamber inlet (0 = uncalibrated; real driver will refuse)")
+    gcal.add_argument("--intake-advance-timeout-s", type=float, default=None,
+                      help="hard timeout for the intake conveyor advance (seconds); must be > conveyor_ack_s")
 
     args = ap.parse_args(argv)
 
@@ -200,6 +204,8 @@ SETTING_FLAGS = {
     "safety_margin_steps": ("safety_margin_steps", int),
     "discharge_timeout_s": ("discharge_timeout_s", float),
     "carriage_move_timeout_s": ("carriage_move_timeout_s", float),
+    "hopper_to_chamber_steps": ("hopper_to_chamber_steps", int),
+    "intake_advance_timeout_s": ("intake_advance_timeout_s", float),
 }
 
 
@@ -249,7 +255,11 @@ def main(argv: list[str] | None = None) -> None:
             print(f"expired {expired} command(s) queued while no supervisor was running")
     overrides = resolve_settings(args, conn)
 
-    controller = BatchController(target_kg=args.target_kg)
+    controller = BatchController(
+        target_kg=args.target_kg,
+        intake_advance_timeout_s=args.intake_advance_timeout_s
+            if args.intake_advance_timeout_s is not None else 30.0,
+    )
     conveyor = SimulatedConveyor(args.intake_advance_s)
     cache = None if args.simulate else SensorCache()
     io = None if args.dry_run else Actuators(args)
@@ -274,6 +284,15 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  calibration overrides{kept}: {', '.join(f'{k}={v}' for k, v in sorted(overrides.items()))}")
 
     from hardware import grading
+    # hopper_to_chamber_steps = 0 means "uncalibrated".
+    # A real stepper driver must refuse to move with this value:
+    #   if args.hopper_to_chamber_steps <= 0:
+    #       raise RuntimeError("hopper_to_chamber_steps is not calibrated ...")
+    # SimulatedConveyor ignores it; the check lives in the real driver, not here.
+    if not args.simulate and not args.dry_run and not args.hopper_to_chamber_steps:
+        print("WARNING: hopper_to_chamber_steps is 0 / unset. "
+              "The real conveyor driver will refuse the intake advance. "
+              "Calibrate with `bench jog conveyor` then --save-settings.")
     grading_cfg = {
         "sample_mode": args.sample_mode,
         "n_samples": args.n_samples,

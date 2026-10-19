@@ -144,16 +144,23 @@ class BatchController:
         max_cooldown_s: float = 30 * 60,
         intake_stall_s: float = 10 * 60,
         conveyor_ack_s: float = 5.0,
+        intake_advance_timeout_s: float = 30.0,
         max_sorting_s: float = 60 * 60,
         heater: HeaterController | None = None,
         fans: FanController | None = None,
         gate: HopperGate | None = None,
         endpoint: DryingEndpoint | None = None,
     ):
+        if intake_advance_timeout_s <= conveyor_ack_s:
+            raise ValueError(
+                f"intake_advance_timeout_s ({intake_advance_timeout_s:.1f} s) must be "
+                f"greater than conveyor_ack_s ({conveyor_ack_s:.1f} s)"
+            )
         self.cooldown_target_c = cooldown_target_c
         self.max_cooldown_s = max_cooldown_s
         self.intake_stall_s = intake_stall_s
         self.conveyor_ack_s = conveyor_ack_s
+        self.intake_advance_timeout_s = intake_advance_timeout_s
         self.max_sorting_s = max_sorting_s
 
         self.heater = heater or HeaterController()
@@ -310,16 +317,20 @@ class BatchController:
     # --- per-state handling --------------------------------------------------
 
     def _intake(self, i: Inputs) -> tuple[bool, ConveyorCommand]:
-        if self._skip_intake_requested:
+        # --- Skip-intake: consume the request, arm the advance clock -----------
+        # Only consume once; if the advance is already running, ignore duplicate.
+        if self._skip_intake_requested and not self._dispensed:
             self._skip_intake_requested = False
             self._dispensed = True
+            self._intake_skipped = True          # telemetry flag for logs / dashboard
             if self.weight_in_kg is None:
                 self.weight_in_kg = self.gate.stable_kg or i.hopper_kg or self.target_kg
             self._alarms.discard("intake_stall")
             self._alarms.discard("hopper_jam")
-            self._alarms.discard("conveyor_stall")
-            self._to(BatchState.DRYING, i.now)
-            return False, ConveyorCommand.STOP
+            self._advance_started = i.now        # reset clock; advance starts this tick
+        elif self._skip_intake_requested:
+            # advance already in progress: silently drop the duplicate request
+            self._skip_intake_requested = False
 
         if not self._dispensed:
             was_open = self.gate.gate_open
@@ -336,14 +347,31 @@ class BatchController:
                 self._alarms.add("intake_stall")
             return gate_open, ConveyorCommand.STOP
 
-        # Dispense done: carry the batch into the chamber.
-        if i.conveyor_busy:
-            self._conveyor_ack = True
-        elif self._conveyor_ack:
+        # --- Advance phase: carry the batch into the chamber ------------------
+        # Order matters: check completion before the timeout so a belt that
+        # finishes on the exact timeout tick still transitions cleanly.
+
+        # 1. Ack seen and belt just went idle → transition to DRYING.
+        #    Both alarms are cleared here because the move succeeded.
+        if self._conveyor_ack and not i.conveyor_busy:
+            self._alarms.discard("conveyor_stall")
+            self._alarms.discard("intake_advance_timeout")
             self._to(BatchState.DRYING, i.now)
             return False, ConveyorCommand.STOP
+
+        # 2. Hard timeout: covers both "belt never moved" and "belt went busy
+        #    but never finished". Stop and hold; operator must abort.
+        if i.now - self._advance_started >= self.intake_advance_timeout_s:
+            self._alarms.add("intake_advance_timeout")
+            return False, ConveyorCommand.STOP
+
+        # 3. Belt is busy right now → record that it acknowledged the command.
+        if i.conveyor_busy:
+            self._conveyor_ack = True
+        # 4. Belt never moved within the early-warning window.
         elif i.now - self._advance_started >= self.conveyor_ack_s:
             self._alarms.add("conveyor_stall")
+
         return False, ConveyorCommand.INTAKE_ADVANCE
 
     def _drying(self, i: Inputs) -> None:
@@ -451,6 +479,7 @@ class BatchController:
         self.sample_valid_n: int = 0
         self.sample_total_n: int = 0
         self.sorting_config_snapshot: str | None = None
+        self._intake_skipped = False
         self._dispensed = False
         self._conveyor_ack = False
         self._advance_started = now

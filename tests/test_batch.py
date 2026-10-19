@@ -182,6 +182,83 @@ class TestIntake(unittest.TestCase):
         with self.assertRaises(ValueError):
             make().set_target_kg(0.01)
 
+    def test_intake_advance_timeout_must_exceed_ack(self):
+        with self.assertRaises(ValueError):
+            make(conveyor_ack_s=5.0, intake_advance_timeout_s=5.0)
+        with self.assertRaises(ValueError):
+            make(conveyor_ack_s=5.0, intake_advance_timeout_s=4.0)
+
+
+class TestSkipIntake(unittest.TestCase):
+    def test_normal_intake_still_reaches_drying_via_advance(self):
+        c = make()
+        t = to_drying(c)
+        self.assertIs(c.state, DRYING)
+
+    def test_skip_during_dispensing_runs_advance_before_drying(self):
+        c = make(conveyor_ack_s=5.0, intake_advance_timeout_s=30.0)
+        t = to_intake(c)
+        c.update(Inputs(now=t, chamber_temp=25.0, hopper_kg=2.0))
+        t += 1
+        c.skip_intake()
+        out = c.update(Inputs(now=t, chamber_temp=25.0))
+        self.assertIs(c.state, INTAKE)
+        self.assertIs(out.conveyor, ConveyorCommand.INTAKE_ADVANCE)
+        t = advance(c, t)
+        self.assertIs(c.state, DRYING)
+
+    def test_skip_after_dispense_is_idempotent(self):
+        c = make(conveyor_ack_s=5.0, intake_advance_timeout_s=30.0)
+        t = dispense(c, to_intake(c))
+        out = c.update(Inputs(now=t, chamber_temp=25.0))
+        self.assertIs(out.conveyor, ConveyorCommand.INTAKE_ADVANCE)
+        c.skip_intake()
+        out = c.update(Inputs(now=t + 1, chamber_temp=25.0))
+        self.assertIs(c.state, INTAKE)
+        self.assertIs(out.conveyor, ConveyorCommand.INTAKE_ADVANCE)
+        t = advance(c, t + 1)
+        self.assertIs(c.state, DRYING)
+
+    def test_skip_outside_intake_is_refused_not_crashed(self):
+        c = make()
+        with self.assertRaises(RuntimeError):
+            c.skip_intake()
+        with self.assertRaises(RuntimeError):
+            apply_command(c, "skip_intake")
+        self.assertIs(c.state, BatchState.IDLE)
+
+    def test_double_skip_runs_advance_exactly_once(self):
+        c = make(conveyor_ack_s=5.0, intake_advance_timeout_s=30.0)
+        t = to_intake(c)
+        c.skip_intake()
+        c.skip_intake()
+        advance_commands = []
+        for _ in range(4):
+            out = c.update(Inputs(now=t, chamber_temp=25.0))
+            advance_commands.append(out.conveyor)
+            t += 1
+        self.assertIn(ConveyorCommand.INTAKE_ADVANCE, advance_commands)
+        t = advance(c, t)
+        self.assertIs(c.state, DRYING)
+
+    def test_advance_timeout_when_belt_never_moves(self):
+        c = make(conveyor_ack_s=5.0, intake_advance_timeout_s=10.0)
+        t = dispense(c, to_intake(c))
+        out = c.update(Inputs(now=t + 11.0, chamber_temp=25.0, conveyor_busy=False))
+        self.assertIn("intake_advance_timeout", out.alarms)
+        self.assertIs(out.conveyor, ConveyorCommand.STOP)
+        self.assertIs(c.state, INTAKE)
+
+    def test_advance_timeout_when_belt_goes_busy_but_never_finishes(self):
+        c = make(conveyor_ack_s=5.0, intake_advance_timeout_s=10.0)
+        t = dispense(c, to_intake(c))
+        c.update(Inputs(now=t + 1.0, chamber_temp=25.0, conveyor_busy=True))
+        self.assertTrue(c._conveyor_ack)
+        out = c.update(Inputs(now=t + 11.0, chamber_temp=25.0, conveyor_busy=True))
+        self.assertIn("intake_advance_timeout", out.alarms)
+        self.assertIs(out.conveyor, ConveyorCommand.STOP)
+        self.assertIs(c.state, INTAKE)
+
 
 class TestDrying(unittest.TestCase):
     def test_heaters_follow_the_hysteresis_band(self):

@@ -7,6 +7,7 @@ SSR and fan relay. Run from inside CopraHeat_dashboard:
     python -m hardware.run_climate --state drying --dry-run   # decisions only, no GPIO
 """
 
+
 import argparse
 import signal
 import sys
@@ -16,7 +17,6 @@ from datetime import datetime
 from hardware import pins, sensors
 from hardware.climate import FanController, HeaterController
 from hardware.states import BatchState
-
 
 # the climate loop only has opinions about these three; the rest are the orchestrator's
 CLIMATE_STATES = (BatchState.IDLE, BatchState.DRYING, BatchState.COOLDOWN)

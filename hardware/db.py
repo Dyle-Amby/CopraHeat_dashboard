@@ -62,6 +62,11 @@ DEFAULT_SETTINGS = {
     "safety_margin_steps": "500",
     "discharge_timeout_s": "60.0",
     "carriage_move_timeout_s": "30.0",
+    # UNCALIBRATED: 0 means the real stepper driver must refuse to run.
+    # Measure with: python -m hardware.bench jog conveyor --steps 500 --hz 400
+    # then save with: python -m hardware.run_cords --save-settings --hopper-to-chamber-steps <N>
+    "hopper_to_chamber_steps": "0",
+    "intake_advance_timeout_s": "30.0",
 }
 
 SCHEMA = """
