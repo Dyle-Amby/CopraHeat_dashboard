@@ -560,5 +560,73 @@ class TestAbortAndReset(unittest.TestCase):
         self.assertAlmostEqual(c.elapsed_s(t), t - 3.0)
 
 
+
+
+class TestDryingTimerAndPrompts(unittest.TestCase):
+
+    def test_drying_timer_expires_while_not_dry_batch_keeps_running(self):
+        c = make()
+        to_drying(c, t=10.0)
+        c.set_drying_timer(300.0, now=10.0)
+        self.assertEqual(c.drying_timer_deadline, 310.0)
+
+        out = c.update(Inputs(now=200.0, chamber_temp=50.0, exhaust_temp=45.0, exhaust_rh=60.0))
+        self.assertIs(out.state, DRYING)
+        self.assertNotIn("drying_timer_expired", out.alarms)
+        self.assertIsNone(out.active_prompt)
+
+        out = c.update(Inputs(now=311.0, chamber_temp=50.0, exhaust_temp=45.0, exhaust_rh=60.0))
+        self.assertIs(out.state, DRYING)
+        self.assertTrue(out.heater_on)
+        self.assertIn("drying_timer_expired", out.alarms)
+        self.assertIsNotNone(out.active_prompt)
+        self.assertEqual(out.active_prompt.id, "drying_timer_expired")
+
+    def test_drying_timer_endpoint_wins_first(self):
+        endpoint = StubEndpoint()
+        c = make(endpoint=endpoint)
+        to_drying(c, t=10.0)
+        c.set_drying_timer(1000.0, now=10.0)
+
+        endpoint.done = True
+        out = c.update(Inputs(now=200.0, chamber_temp=50.0, exhaust_temp=45.0, exhaust_rh=40.0))
+        self.assertIs(out.state, COOLDOWN)
+        self.assertIsNone(c.drying_timer_deadline)
+        self.assertIsNone(c.active_prompt)
+        self.assertNotIn("drying_timer_expired", out.alarms)
+
+    def test_drying_timer_prompt_extension_clamped_to_8h(self):
+        endpoint = StubEndpoint()
+        endpoint.max_time_s = 28800.0
+        c = make(endpoint=endpoint)
+        to_drying(c, t=0.0)
+        c.set_drying_timer(3600.0, now=0.0)
+
+        c.update(Inputs(now=3601.0, chamber_temp=50.0, exhaust_temp=45.0, exhaust_rh=60.0))
+        self.assertIsNotNone(c.active_prompt)
+
+        answered = c.answer_prompt("extend_30", now=3601.0)
+        self.assertTrue(answered)
+        self.assertIsNone(c.active_prompt)
+        self.assertNotIn("drying_timer_expired", c.alarms)
+        self.assertEqual(c.drying_timer_deadline, 3600.0 + 1800.0)
+
+        c.update(Inputs(now=5401.0, chamber_temp=50.0, exhaust_temp=45.0, exhaust_rh=60.0))
+        c.answer_prompt("extend_6000", now=5401.0)
+        self.assertEqual(c.drying_timer_deadline, c._drying_started + 28800.0)
+
+    def test_drying_timer_prompt_end_drying_action(self):
+        c = make()
+        to_drying(c, t=0.0)
+        c.set_drying_timer(100.0, now=0.0)
+        c.update(Inputs(now=101.0, chamber_temp=50.0, exhaust_temp=45.0, exhaust_rh=60.0))
+        self.assertIsNotNone(c.active_prompt)
+
+        answered = c.answer_prompt("end_drying", now=101.0)
+        self.assertTrue(answered)
+        self.assertIsNone(c.active_prompt)
+        out = c.update(Inputs(now=102.0, chamber_temp=50.0, exhaust_temp=45.0, exhaust_rh=60.0))
+        self.assertIs(out.state, COOLDOWN)
+
 if __name__ == "__main__":
     unittest.main()

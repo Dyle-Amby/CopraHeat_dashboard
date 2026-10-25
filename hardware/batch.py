@@ -11,10 +11,12 @@ on the next `update()`, where there are fresh readings to act on.
 """
 
 from dataclasses import dataclass
+from typing import Any
 
 from hardware.climate import FanController, HeaterController
 from hardware.drying import DryingEndpoint
 from hardware.hopper import HopperGate
+from hardware.sorting import Prompt
 from hardware.states import BatchState, ConveyorCommand
 
 _LIVE = (BatchState.INTAKE, BatchState.DRYING, BatchState.COOLDOWN, BatchState.SORTING)
@@ -23,7 +25,19 @@ _FINISHED = (BatchState.COMPLETE, BatchState.ABORTED)
 # The operator vocabulary, kept next to the methods it maps to. The data layer
 # validates against it and the supervisor dispatches with apply_command().
 COMMAND_NAMES = frozenset(
-    {"start", "skip_intake", "end_drying", "finish_sorting", "abort", "reset", "set_target_kg", "override_grade"}
+    {
+        "start",
+        "skip_intake",
+        "end_drying",
+        "finish_sorting",
+        "abort",
+        "reset",
+        "set_target_kg",
+        "override_grade",
+        "set_drying_timer",
+        "answer_prompt",
+        "clear_prompt",
+    }
 )
 
 
@@ -61,6 +75,9 @@ class Commands:
     fan_reason: str = "off"
     sorting_stage: str | None = None        # "sample" | "await_review" | "discharge" | None
     carriage_target: str | None = None      # "great" | "good" | "bad" | None
+    active_prompt: Prompt | None = None
+    drying_timer_duration_s: float | None = None
+    drying_timer_deadline: float | None = None
 
 
 @dataclass(frozen=True)
@@ -88,9 +105,11 @@ class BatchRecord:
     sample_total_n: int = 0
     sorting_config_snapshot: str | None = None
     drying_timed_out: bool = False
+    drying_timer_duration_s: float | None = None
+    drying_timer_deadline: float | None = None
 
 
-def apply_command(controller: "BatchController", name: str, payload: str | None = None) -> str:
+def apply_command(controller: "BatchController", name: str, payload: Any = None) -> str:
     """Dispatch an operator command by name and return what to tell the operator.
 
     Raises ValueError for a name or payload that makes no sense, and RuntimeError
@@ -117,7 +136,7 @@ def apply_command(controller: "BatchController", name: str, payload: str | None 
         controller.override_grade(payload)
         return f"grade overridden to {payload}"
     if name == "abort":
-        reason = payload or "operator abort"
+        reason = payload if isinstance(payload, str) else (payload.get("reason", "operator abort") if isinstance(payload, dict) else "operator abort")
         controller.abort(reason)
         return f"aborting: {reason}"
     if name == "reset":
@@ -128,6 +147,60 @@ def apply_command(controller: "BatchController", name: str, payload: str | None 
             raise ValueError("set_target_kg needs a target weight")
         controller.set_target_kg(float(payload))   # float() rejects junk payloads
         return f"target weight set to {controller.target_kg} kg"
+    if name == "set_drying_timer":
+        if payload is None:
+            raise ValueError("set_drying_timer requires a duration payload")
+        import json
+        duration_s = None
+        if isinstance(payload, (int, float)):
+            duration_s = float(payload)
+        elif isinstance(payload, dict):
+            if "duration_min" in payload:
+                duration_s = float(payload["duration_min"]) * 60.0
+            elif "duration_s" in payload:
+                duration_s = float(payload["duration_s"])
+        elif isinstance(payload, str):
+            try:
+                data = json.loads(payload)
+                if isinstance(data, dict):
+                    if "duration_min" in data:
+                        duration_s = float(data["duration_min"]) * 60.0
+                    elif "duration_s" in data:
+                        duration_s = float(data["duration_s"])
+                else:
+                    duration_s = float(data)
+            except Exception:
+                duration_s = float(payload)
+        if duration_s is None or duration_s <= 0:
+            raise ValueError("drying timer duration must be positive")
+        controller.set_drying_timer(duration_s)
+        return f"drying timer set to {duration_s / 60:.1f} minutes"
+    if name == "answer_prompt":
+        if payload is None:
+            raise ValueError("answer_prompt requires an action payload")
+        import json
+        action = None
+        prompt_id = None
+        if isinstance(payload, dict):
+            action = payload.get("action") or payload.get("option")
+            prompt_id = payload.get("id")
+        elif isinstance(payload, str):
+            try:
+                data = json.loads(payload)
+                if isinstance(data, dict):
+                    action = data.get("action") or data.get("option")
+                    prompt_id = data.get("id")
+                else:
+                    action = str(data)
+            except Exception:
+                action = payload
+        if not action:
+            raise ValueError("answer_prompt requires an action")
+        ok = controller.answer_prompt(action, prompt_id=prompt_id)
+        return f"prompt answered with {action}" if ok else "no matching prompt to answer"
+    if name == "clear_prompt":
+        controller.clear_prompt()
+        return "active prompt cleared"
     raise ValueError(f"unknown command {name!r}")
 
 
@@ -230,6 +303,63 @@ class BatchController:
             raise RuntimeError(f"cannot reset from {self.state.value}")
         self._reset_requested = True
 
+    def set_drying_timer(self, duration_s: float, now: float | None = None) -> None:
+        """Set operator drying timer. Clamped so deadline never exceeds 8 h from drying start."""
+        if self.state not in (BatchState.DRYING, BatchState.INTAKE, BatchState.IDLE):
+            raise RuntimeError(f"cannot set drying timer in {self.state.value}")
+        self.drying_timer_duration_s = duration_s
+        ref_time = now if now is not None else (self._drying_started or self._entered_at or 0.0)
+        max_duration = getattr(self.endpoint, "max_time_s", 28800.0)
+        if self._drying_started is not None:
+            remaining_to_8h = max(0.0, (self._drying_started + max_duration) - ref_time)
+            effective_dur = min(duration_s, remaining_to_8h)
+            self.drying_timer_deadline = ref_time + effective_dur
+        else:
+            self.drying_timer_deadline = ref_time + min(duration_s, max_duration)
+        self._alarms.discard("drying_timer_expired")
+        if self.active_prompt and self.active_prompt.id == "drying_timer_expired":
+            self.active_prompt = None
+
+    def answer_prompt(self, action: str, now: float | None = None, prompt_id: str | None = None) -> bool:
+        """Answer an active blocking prompt."""
+        if not self.active_prompt:
+            return False
+        if prompt_id and self.active_prompt.id != prompt_id:
+            return False
+
+        p_id = self.active_prompt.id
+        max_duration = getattr(self.endpoint, "max_time_s", 28800.0)
+        if p_id == "drying_timer_expired":
+            if action.startswith("extend_"):
+                try:
+                    mins = float(action.replace("extend_", ""))
+                    add_s = mins * 60.0
+                except Exception:
+                    add_s = 1800.0
+                ref_time = self.drying_timer_deadline if self.drying_timer_deadline is not None else (now or 0.0)
+                max_deadline = (self._drying_started or 0.0) + max_duration
+                new_deadline = min(ref_time + add_s, max_deadline)
+                self.drying_timer_deadline = new_deadline
+                self._alarms.discard("drying_timer_expired")
+                self.active_prompt = None
+                return True
+            elif action == "end_drying":
+                self._alarms.discard("drying_timer_expired")
+                self.active_prompt = None
+                self.end_drying()
+                return True
+        elif p_id in ("carriage_fault", "positioning_stall", "discharge_timeout", "bin_did_not_gain_weight"):
+            if action == "abort":
+                self.abort(f"operator aborted on {p_id}")
+                self.active_prompt = None
+                return True
+            self.active_prompt = None
+            return True
+        return False
+
+    def clear_prompt(self) -> None:
+        self.active_prompt = None
+
     # --- readouts ------------------------------------------------------------
 
     @property
@@ -266,6 +396,8 @@ class BatchController:
             sample_total_n=self.sample_total_n,
             sorting_config_snapshot=self.sorting_config_snapshot,
             drying_timed_out=self.drying_timed_out,
+            drying_timer_duration_s=self.drying_timer_duration_s,
+            drying_timer_deadline=self.drying_timer_deadline,
         )
 
     # --- the loop ------------------------------------------------------------
@@ -316,6 +448,9 @@ class BatchController:
             fan_reason=self.fans.reason,
             sorting_stage=sorting_stage,
             carriage_target=carriage_target,
+            active_prompt=self.active_prompt,
+            drying_timer_duration_s=self.drying_timer_duration_s,
+            drying_timer_deadline=self.drying_timer_deadline,
         )
 
     # --- per-state handling --------------------------------------------------
@@ -385,11 +520,40 @@ class BatchController:
 
         if self.endpoint.timeout:
             self._alarms.add("drying_timeout")
+            self._alarms.discard("drying_timer_expired")
             self.drying_timed_out = True
+            self.drying_timer_deadline = None
+            self.active_prompt = None
             self._to(BatchState.COOLDOWN, i.now)
-        elif done or self._end_drying_requested:
+            return
+
+        if done or self._end_drying_requested:
             self._end_drying_requested = False
+            self.drying_timer_deadline = None
+            self.active_prompt = None
+            self._alarms.discard("drying_timer_expired")
             self._to(BatchState.COOLDOWN, i.now)
+            return
+
+        # Operator drying timer check
+        if self.drying_timer_deadline is not None:
+            if i.now >= self.drying_timer_deadline:
+                self._alarms.add("drying_timer_expired")
+                start = self._drying_started if self._drying_started is not None else self._entered_at
+                max_duration = getattr(self.endpoint, "max_time_s", 28800.0)
+                remaining_to_8h = max(0.0, (start + max_duration) - i.now)
+                rem_min = int(remaining_to_8h // 60)
+                if self.active_prompt is None or self.active_prompt.id != "drying_timer_expired":
+                    self.active_prompt = Prompt(
+                        id="drying_timer_expired",
+                        message=(
+                            f"Drying timer expired but copra is not yet dry. "
+                            f"{rem_min} min remaining before 8 h limit. Choose action:"
+                        ),
+                        options=["extend_15", "extend_30", "extend_60", "end_drying"],
+                        created_at=i.now,
+                        context={"remaining_to_8h_s": remaining_to_8h, "rem_min": rem_min},
+                    )
 
     def _cooldown(self, i: Inputs) -> None:
         self._set_alarm("chamber_sensor_fault", i.chamber_temp is None)
@@ -446,6 +610,9 @@ class BatchController:
         if state is BatchState.DRYING:
             self.endpoint.start(now)
             self._drying_started = now
+            if self.drying_timer_duration_s is not None and self.drying_timer_deadline is None:
+                max_dur = getattr(self.endpoint, "max_time_s", 28800.0)
+                self.drying_timer_deadline = now + min(self.drying_timer_duration_s, max_dur)
         elif self._drying_started is not None:
             self.drying_s = now - self._drying_started
             self._drying_started = None
@@ -485,6 +652,9 @@ class BatchController:
         self.sample_total_n: int = 0
         self.sorting_config_snapshot: str | None = None
         self.drying_timed_out: bool = False
+        self.drying_timer_duration_s: float | None = None
+        self.drying_timer_deadline: float | None = None
+        self.active_prompt: Prompt | None = None
         self._intake_skipped = False
         self._dispensed = False
         self._conveyor_ack = False

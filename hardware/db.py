@@ -128,7 +128,9 @@ CREATE TABLE IF NOT EXISTS batches (
     sample_total_n          INTEGER NOT NULL DEFAULT 0,
     sorting_config_snapshot TEXT,
     -- v3 additive batch column for non-aborting 8 h ceiling
-    drying_timed_out        INTEGER NOT NULL DEFAULT 0
+    drying_timed_out        INTEGER NOT NULL DEFAULT 0,
+    drying_timer_duration_s REAL,
+    drying_timer_deadline_s REAL
 );
 
 -- No ambient column and no live moisture or weight-loss column: there is no
@@ -181,7 +183,8 @@ CREATE TABLE IF NOT EXISTS machine_state (
     gate_open      INTEGER NOT NULL DEFAULT 0,
     conveyor       TEXT,
     alarms         TEXT,
-    components     TEXT
+    components     TEXT,
+    active_prompt  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -308,6 +311,26 @@ def _ensure_fan_reason_columns(conn: sqlite3.Connection) -> None:
             cur.execute("ALTER TABLE machine_state ADD COLUMN fan_reason TEXT")
 
 
+def _ensure_prompt_and_timer_columns(conn: sqlite3.Connection) -> None:
+    """Add drying_timer columns to batches and active_prompt to machine_state if missing."""
+    cur = conn.cursor()
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='batches'")
+    if cur.fetchone() is not None:
+        cur.execute("PRAGMA table_info(batches)")
+        b_cols = [row[1] for row in cur.fetchall()]
+        if "drying_timer_duration_s" not in b_cols:
+            cur.execute("ALTER TABLE batches ADD COLUMN drying_timer_duration_s REAL")
+        if "drying_timer_deadline_s" not in b_cols:
+            cur.execute("ALTER TABLE batches ADD COLUMN drying_timer_deadline_s REAL")
+
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='machine_state'")
+    if cur.fetchone() is not None:
+        cur.execute("PRAGMA table_info(machine_state)")
+        m_cols = [row[1] for row in cur.fetchall()]
+        if "active_prompt" not in m_cols:
+            cur.execute("ALTER TABLE machine_state ADD COLUMN active_prompt TEXT")
+
+
 def init(conn: sqlite3.Connection) -> None:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version == 1:
@@ -322,6 +345,7 @@ def init(conn: sqlite3.Connection) -> None:
         )
     conn.executescript(SCHEMA)
     _ensure_fan_reason_columns(conn)
+    _ensure_prompt_and_timer_columns(conn)
     conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     stamp = now_iso()
     conn.executemany(
@@ -352,6 +376,11 @@ def _row_to_dict(row: sqlite3.Row | None) -> dict | None:
             out["components"] = json.loads(out["components"])
         except Exception:
             pass
+    if "active_prompt" in out and out["active_prompt"]:
+        try:
+            out["active_prompt"] = json.loads(out["active_prompt"])
+        except Exception:
+            pass
     return out
 
 
@@ -379,6 +408,15 @@ def set_batch_drying_timed_out(conn: sqlite3.Connection, batch_id: int, timed_ou
     )
 
 
+def set_batch_drying_timer(
+    conn: sqlite3.Connection, batch_id: int, duration_s: float | None, deadline_s: float | None
+) -> None:
+    conn.execute(
+        "UPDATE batches SET drying_timer_duration_s = ?, drying_timer_deadline_s = ? WHERE id = ?",
+        (duration_s, deadline_s, batch_id),
+    )
+
+
 def mark_interrupted_batches(conn: sqlite3.Connection) -> int:
     cur = conn.execute(
         """UPDATE batches
@@ -399,7 +437,7 @@ def finish_batch(conn: sqlite3.Connection, batch_id: int, record: BatchRecord, s
                batch_grade = ?, operator_grade = ?, override_used = ?,
                needs_review = ?, sample_vectors = ?, sample_valid_n = ?,
                sample_total_n = ?, sorting_config_snapshot = ?,
-               drying_timed_out = ?
+               drying_timed_out = ?, drying_timer_duration_s = ?, drying_timer_deadline_s = ?
            WHERE id = ?""",
         (
             now_iso(),
@@ -421,6 +459,8 @@ def finish_batch(conn: sqlite3.Connection, batch_id: int, record: BatchRecord, s
             record.sample_total_n,
             record.sorting_config_snapshot,
             int(getattr(record, "drying_timed_out", False)),
+            getattr(record, "drying_timer_duration_s", None),
+            getattr(record, "drying_timer_deadline", None),
             batch_id,
         ),
     )
@@ -474,19 +514,28 @@ def update_live(
     conveyor: str | None = None,
     alarms: frozenset[str] | list[str] | None = None,
     components: dict | str | None = None,
+    active_prompt: dict | str | None = None,
 ) -> None:
     comp_json = json.dumps(components) if isinstance(components, dict) else (components or "{}")
+    prompt_json = None
+    if active_prompt is not None:
+        if hasattr(active_prompt, "to_dict"):
+            prompt_json = json.dumps(active_prompt.to_dict())
+        elif isinstance(active_prompt, dict):
+            prompt_json = json.dumps(active_prompt)
+        elif isinstance(active_prompt, str):
+            prompt_json = active_prompt
     conn.execute(
         """INSERT OR REPLACE INTO machine_state
                (id, updated_at, supervisor_pid, batch_id, state, elapsed_s,
                 chamber_c, exhaust_c, exhaust_rh, exhaust_ah, hopper_kg, target_kg,
-                heater_on, fans_on, fan_reason, gate_open, conveyor, alarms, components)
-           VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                heater_on, fans_on, fan_reason, gate_open, conveyor, alarms, components, active_prompt)
+           VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             now_iso(), supervisor_pid, batch_id, state, elapsed_s,
             chamber_c, exhaust_c, exhaust_rh, exhaust_ah, hopper_kg, target_kg,
             int(heater_on), int(fans_on), fan_reason, int(gate_open), conveyor,
-            json.dumps(sorted(alarms or [])), comp_json,
+            json.dumps(sorted(alarms or [])), comp_json, prompt_json,
         ),
     )
 
