@@ -293,6 +293,18 @@ table.history-table tbody tr td:last-child{ border-radius:0 10px 10px 0; }
 .state-badge[data-state="offline"]{ background:transparent; border:1.5px solid var(--bad); color:var(--bad); }
 
 .badge-review-flag{ color:var(--bad); font-weight:bold; font-size:1rem; margin-left:4px; vertical-align:middle; }
+.badge-timeout-flag{
+  background: rgba(217, 119, 6, 0.12);
+  color: #b45309;
+  border: 1px solid rgba(217, 119, 6, 0.35);
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 10px;
+  margin-left: 4px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
 
 .cmd-feedback{ font-size:0.85rem; margin:14px 4px 0; min-height:1.3em; }
 .cmd-feedback[data-kind="pending"]{ color:var(--muted); }

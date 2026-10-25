@@ -5,6 +5,7 @@ queues operator commands into the database and reads back what the machine
 did with them. See hardware/db.py for the tables.
 """
 
+import json
 import math
 import os
 from datetime import datetime
@@ -15,6 +16,26 @@ from hardware import db
 from hardware.batch import COMMAND_NAMES
 
 ABORT_REASON_MAX = 200
+
+# Maintenance commands for /components page (calibrations, tests, jogs)
+MAINTENANCE_COMMANDS = frozenset({
+    "acquire_calibration_lock",
+    "release_calibration_lock",
+    "jog_conveyor",
+    "stop_conveyor",
+    "save_conveyor_leg",
+    "set_conveyor_p00",
+    "mark_conveyor_stale",
+    "goto_carriage_bin",
+    "home_carriage",
+    "test_carriage_limits",
+    "tare_hopper",
+    "calibrate_hopper_scale",
+    "set_hopper_servo",
+    "test_component",
+})
+
+ALL_COMMANDS = COMMAND_NAMES | MAINTENANCE_COMMANDS
 
 
 def supervisor_status(live: dict | None) -> str:
@@ -32,11 +53,42 @@ def supervisor_status(live: dict | None) -> str:
 
 def validate_command(name, payload):
     """Returns (name, payload) ready to queue, or raises ValueError with the
-    message to show the operator. The machine re-validates everything; this
-    only catches what is wrong regardless of machine state."""
-    if name not in COMMAND_NAMES:
+    message to show the operator. Accepts string, numeric, or JSON-object (dict) payloads.
+    The machine re-validates everything; this only catches what is wrong regardless of machine state."""
+    if name not in ALL_COMMANDS:
         raise ValueError(f"unknown command {name!r}")
+
+    # Process commands that take no payload drop any provided payload
+    if name in ("start", "skip_intake", "end_drying", "finish_sorting", "reset"):
+        return name, None
+
+    # Handle dictionary / JSON-object payload
+    if isinstance(payload, dict):
+        if name == "set_target_kg":
+            val = payload.get("target_kg")
+            if val is None:
+                raise ValueError("set_target_kg needs a target weight")
+            try:
+                f_val = float(val)
+            except (TypeError, ValueError):
+                raise ValueError("target weight must be a number of kilograms") from None
+            if not math.isfinite(f_val) or f_val <= 0:
+                raise ValueError("target weight must be greater than zero")
+            return name, repr(f_val)
+        if name == "override_grade":
+            grade = payload.get("grade")
+            if grade not in ("great", "good", "bad"):
+                raise ValueError(f"invalid grade {grade!r}; expected 'great', 'good', or 'bad'")
+            return name, grade
+        if name == "abort":
+            reason = (payload.get("reason") or "").strip() or "operator abort"
+            return name, reason[:ABORT_REASON_MAX]
+        return name, json.dumps(payload)
+
+    # String / scalar payload
     if name == "set_target_kg":
+        if payload is None:
+            raise ValueError("set_target_kg needs a target weight")
         try:
             value = float(payload)
         except (TypeError, ValueError):
@@ -51,6 +103,8 @@ def validate_command(name, payload):
     if name == "abort":
         reason = (payload or "").strip() or "operator abort"
         return name, reason[:ABORT_REASON_MAX]
+    if payload is not None:
+        return name, str(payload)
     return name, None
 
 
@@ -140,6 +194,9 @@ def create_app(db_path=None) -> Flask:
         out["supervisor"] = supervisor_status(live)
         batch_id = out.get("batch_id")
         out["batch"] = db.get_batch(conn, batch_id) if batch_id is not None else None
+        lock = db.get_calibration_lock(conn)
+        out["calibration_locked"] = lock is not None
+        out["calibration_lock"] = lock
         return jsonify(out)
 
     @app.get("/api/batches")
@@ -167,17 +224,67 @@ def create_app(db_path=None) -> Flask:
     @app.post("/api/commands")
     def api_queue_command():
         body = request.get_json(silent=True) or {}
+        raw_name = body.get("name")
+        raw_payload = body.get("payload")
         try:
-            name, payload = validate_command(body.get("name"), body.get("payload"))
+            name, payload = validate_command(raw_name, raw_payload)
         except ValueError as exc:
             return json_error(400, str(exc))
 
         conn = get_conn()
-        # refuse rather than queue: a command left waiting for a dead
-        # supervisor would fire whenever it next came up
-        status = supervisor_status(db.live_state(conn))
+        live = db.live_state(conn)
+        status = supervisor_status(live)
         if status != "running":
             return json_error(409, f"machine is not accepting commands (supervisor {status.replace('_', ' ')})")
+
+        # Maintenance gate: applies to maintenance actions
+        if name in MAINTENANCE_COMMANDS:
+            # 1. Supervisor must be running (checked above)
+            # 2. Machine must be IDLE
+            current_state = live.get("state")
+            if current_state != "idle":
+                return json_error(409, f"maintenance actions require machine to be IDLE (currently {current_state})")
+
+            # 3. Heaters off
+            if live.get("heater_on"):
+                return json_error(409, "maintenance actions require heaters to be off")
+
+            # 4. Optional PIN check (CORDS_PIN env var)
+            required_pin = os.environ.get("CORDS_PIN")
+            if required_pin:
+                given_pin = request.headers.get("X-CORDS-PIN")
+                if not given_pin and isinstance(raw_payload, dict):
+                    given_pin = raw_payload.get("pin")
+                if given_pin != required_pin:
+                    return json_error(403, "invalid or missing PIN")
+
+            # 5. Calibration lock required (except when acquiring the lock itself)
+            if name != "acquire_calibration_lock":
+                lock = db.get_calibration_lock(conn)
+                if lock is None:
+                    return json_error(409, "calibration lock required for maintenance actions")
+
+        # Process command: start requires calibration lock NOT held
+        if name == "start" and db.is_calibration_locked(conn):
+            return json_error(409, "cannot start batch: calibration in progress")
+
+        # Direct database lock acquisition / release
+        if name == "acquire_calibration_lock":
+            dur = 300.0
+            comp = None
+            sess = None
+            if isinstance(raw_payload, dict):
+                dur = float(raw_payload.get("duration_s", 300.0))
+                comp = raw_payload.get("component")
+                sess = raw_payload.get("session_id")
+            granted = db.acquire_calibration_lock(conn, duration_s=dur, component=comp, session_id=sess)
+            if not granted:
+                return json_error(409, "calibration lock is held by another active session")
+        elif name == "release_calibration_lock":
+            sess = None
+            if isinstance(raw_payload, dict):
+                sess = raw_payload.get("session_id")
+            db.release_calibration_lock(conn, session_id=sess)
 
         command_id = db.queue_command(conn, name, payload)
         return jsonify(db.command_status(conn, command_id)), 202
@@ -199,8 +306,4 @@ def create_app(db_path=None) -> Flask:
 
 
 if __name__ == "__main__":
-    # host="0.0.0.0" so the dashboard is reachable from other devices on the
-    # same network as the Raspberry Pi, not just localhost. Debug stays opt-in
-    # (FLASK_DEBUG=1): the Werkzeug debugger runs arbitrary code for anyone who
-    # can reach the port.
     create_app().run(host="0.0.0.0", port=5000, debug=os.environ.get("FLASK_DEBUG") == "1")

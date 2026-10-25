@@ -24,7 +24,14 @@ document.addEventListener('DOMContentLoaded', function () {
     const running = live && live.supervisor === 'running';
     document.querySelectorAll('.cp-btn').forEach(btn => {
       const allowed = ALLOWED[btn.dataset.command] || [];
-      btn.disabled = busy || !running || !allowed.includes(live.state);
+      let disabled = busy || !running || !allowed.includes(live.state);
+      if (btn.dataset.command === 'start' && live && live.calibration_locked) {
+        disabled = true;
+        btn.title = 'Calibration in progress (locked)';
+      } else if (btn.dataset.command === 'start') {
+        btn.removeAttribute('title');
+      }
+      btn.disabled = disabled;
     });
   }
 
@@ -51,6 +58,17 @@ document.addEventListener('DOMContentLoaded', function () {
       ? (C.STATE_LABELS[state.state] || '—')
       : 'Offline';
     $('stateBadge').dataset.state = state.supervisor === 'running' ? state.state : 'offline';
+
+    // Toggle calibration in progress banner
+    const calBanner = $('calibrationBanner');
+    if (calBanner) {
+      if (state.calibration_locked) {
+        calBanner.classList.remove('d-none');
+      } else {
+        calBanner.classList.add('d-none');
+      }
+    }
+
     // don't overwrite what the operator is typing
     const input = $('targetInput');
     if (document.activeElement !== input && state.target_kg != null) {

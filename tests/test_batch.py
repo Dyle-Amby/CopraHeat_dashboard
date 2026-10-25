@@ -287,14 +287,18 @@ class TestDrying(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             make().end_drying()
 
-    def test_timeout_aborts_the_batch(self):
+    def test_timeout_flags_and_continues_to_cooldown(self):
         c = make()
         t = to_drying(c)
         c.endpoint.timeout = True
         out = c.update(Inputs(now=t, chamber_temp=65.0))
         self.assertIn("drying_timeout", out.alarms)
-        self.assertTrue(c.aborted)
-        self.assertIs(out.state, COOLDOWN)   # hot chamber: purge before stopping
+        self.assertTrue(c.drying_timed_out)
+        self.assertFalse(c.aborted)
+        self.assertIs(out.state, COOLDOWN)
+        out2 = c.update(Inputs(now=t + 10, chamber_temp=35.0))
+        self.assertIs(out2.state, SORTING)
+        self.assertFalse(c.aborted)
 
     def test_sensor_faults_set_and_clear(self):
         c = make()

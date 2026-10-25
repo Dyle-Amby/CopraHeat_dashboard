@@ -258,7 +258,7 @@ class TestDatabaseMigrationV2(unittest.TestCase):
 
         # Verify version updated
         ver = conn.execute("PRAGMA user_version").fetchone()[0]
-        self.assertEqual(ver, 2)
+        self.assertEqual(ver, db.SCHEMA_VERSION)
 
         # Verify row preserved and new columns present with legacy nulls
         row = conn.execute("SELECT * FROM batches WHERE id = 1").fetchone()

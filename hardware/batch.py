@@ -87,6 +87,7 @@ class BatchRecord:
     sample_valid_n: int = 0
     sample_total_n: int = 0
     sorting_config_snapshot: str | None = None
+    drying_timed_out: bool = False
 
 
 def apply_command(controller: "BatchController", name: str, payload: str | None = None) -> str:
@@ -264,6 +265,7 @@ class BatchController:
             sample_valid_n=self.sample_valid_n,
             sample_total_n=self.sample_total_n,
             sorting_config_snapshot=self.sorting_config_snapshot,
+            drying_timed_out=self.drying_timed_out,
         )
 
     # --- the loop ------------------------------------------------------------
@@ -383,7 +385,8 @@ class BatchController:
 
         if self.endpoint.timeout:
             self._alarms.add("drying_timeout")
-            self._begin_abort("drying exceeded its time ceiling", i)
+            self.drying_timed_out = True
+            self._to(BatchState.COOLDOWN, i.now)
         elif done or self._end_drying_requested:
             self._end_drying_requested = False
             self._to(BatchState.COOLDOWN, i.now)
@@ -481,6 +484,7 @@ class BatchController:
         self.sample_valid_n: int = 0
         self.sample_total_n: int = 0
         self.sorting_config_snapshot: str | None = None
+        self.drying_timed_out: bool = False
         self._intake_skipped = False
         self._dispensed = False
         self._conveyor_ack = False

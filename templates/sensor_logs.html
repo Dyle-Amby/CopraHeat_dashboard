@@ -12,7 +12,7 @@
   <label for="batchSelect" style="font-size:0.85rem; color:var(--muted);">Batch</label>
   <select class="cp-input" id="batchSelect">
     {% for b in batches %}
-    <option value="{{ b.id }}" {{ 'selected' if b.id == selected else '' }}>#{{ b.id }} &middot; {{ b.started_at | date }} &middot; {{ b.state }}</option>
+    <option value="{{ b.id }}" {{ 'selected' if b.id == selected else '' }}>#{{ b.id }} &middot; {{ b.started_at | date }} &middot; {{ b.state }}{% if b.drying_timed_out %} (drying timed out){% endif %}</option>
     {% endfor %}
   </select>
 </div>

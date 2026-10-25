@@ -38,8 +38,10 @@ class LocatedAtTest(unittest.TestCase):
 
 class MovingUpTest(unittest.TestCase):
     def test_directions(self):
-        self.assertTrue(moving_up("LS1", "LS3"))
-        self.assertFalse(moving_up("LS3", "LS2"))
+        # ORDER is ("LS3", "LS2", "LS1"): LS3 bottom (0), LS1 top (2)
+        self.assertTrue(moving_up("LS3", "LS1"))
+        self.assertFalse(moving_up("LS1", "LS3"))
+        self.assertFalse(moving_up("LS2", "LS3"))
 
 
 class MoveWatchTest(unittest.TestCase):

@@ -30,6 +30,8 @@ HX711_BIN_GOOD = HX711Pins(dout=15, sck=14)   # phys 10 /  8
 HX711_BIN_BAD = HX711Pins(dout=13, sck=16)    # phys 33 / 36
 
 # --- Motor drivers -----------------------------------------------------------
+# Stepper driver inputs (TB6600, HBS57H) use 2N2222A NPN sinking transistors on
+# PUL/DIR, with PUL+ and DIR+ tied to a 5 V rail (common-anode sinking configuration).
 TB6600_CARRIAGE = StepperPins(pul=17, dir=27)  # phys 11 / 13 - 57BYGH420, bin carriage
 HBS57H_CONVEYOR = StepperPins(pul=22, dir=23)  # phys 15 / 16 - 57HS82, conveyor belt
 
@@ -48,9 +50,10 @@ LIMIT_SWITCH_2 = 20  # phys 38
 LIMIT_SWITCH_3 = 21  # phys 40
 
 # --- Relay / SSR triggers ----------------------------------------------------
-# Both lines have a 10k pull-down on the interface board so they cannot fire
-# while the GPIO is floating during boot, reset, or a crashed control process.
-HEATER_SSR = 5  # phys 29 - Fotek SSR, 3x 220V IR bulbs; pull-down GPIO -> GND
+# Both lines have an NPN buffer circuit (2N2222) with a 10k pull-down on the base
+# so they cannot fire while the GPIO is floating during boot, reset, or a crashed
+# control process.
+HEATER_SSR = 5  # phys 29 - Fotek SSR, 3x 220V IR bulbs; pull-down on NPN buffer base
 FAN_RELAY = 25  # phys 22 - Tongling relay via 2N2222; pull-down on transistor base
                 # (moved off GPIO6 / phys 31, whose output died on 2026-10-10)
 

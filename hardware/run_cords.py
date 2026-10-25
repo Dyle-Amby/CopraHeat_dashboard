@@ -23,7 +23,7 @@ from datetime import datetime
 
 from hardware import db, pins, sensors
 from hardware.batch import BatchController, Commands, Inputs, apply_command
-from hardware.conveyor import SimulatedConveyor
+from hardware.motion import CarriageDriver, SimulatedCarriage, SimulatedConveyor, StepperConveyor
 from hardware.drying import absolute_humidity
 from hardware.states import BatchState
 
@@ -288,7 +288,24 @@ def main(argv: list[str] | None = None) -> None:
             if args.intake_advance_timeout_s is not None else 30.0,
         fans=FanController(**fan_kwargs),
     )
-    conveyor = SimulatedConveyor(args.intake_advance_s)
+    if args.simulate or args.dry_run:
+        conveyor = SimulatedConveyor(
+            advance_s=args.intake_advance_s,
+            hopper_to_chamber_steps=args.hopper_to_chamber_steps or 2000,
+            default_hz=args.sample_hz or 400.0,
+        )
+        carriage_driver = SimulatedCarriage()
+    else:
+        conveyor = StepperConveyor(
+            pins.HBS57H_CONVEYOR,
+            hopper_to_chamber_steps=args.hopper_to_chamber_steps or 0,
+            default_hz=args.sample_hz or 400.0,
+        )
+        carriage_driver = CarriageDriver(
+            pins.TB6600_CARRIAGE,
+            default_hz=400.0,
+        )
+        carriage_driver.check_home()
     cache = None if args.simulate else SensorCache()
     io = None if args.dry_run else Actuators(args)
 
@@ -368,6 +385,7 @@ def main(argv: list[str] | None = None) -> None:
     last_state = None
     last_alarms: frozenset[str] = frozenset()
     batch_id: int | None = None
+    batch_drying_timed_out_saved: bool = False
 
     try:
         while True:
@@ -378,7 +396,12 @@ def main(argv: list[str] | None = None) -> None:
             if conn is not None:
                 for row in db.pending_commands(conn):
                     try:
-                        message = apply_command(controller, row["name"], row["payload"])
+                        if row["name"] == "start" and db.is_calibration_locked(conn):
+                            raise RuntimeError("cannot start batch: calibration in progress")
+                        if row["name"] in ("acquire_calibration_lock", "release_calibration_lock"):
+                            message = f"{row['name']} acknowledged"
+                        else:
+                            message = apply_command(controller, row["name"], row["payload"])
                         db.resolve_command(conn, row["id"], db.DONE, message)
                         if row["name"] == "set_target_kg":
                             # keep it across restarts, or the next run silently
@@ -422,21 +445,25 @@ def main(argv: list[str] | None = None) -> None:
 
                 # Phase 1: Sampling
                 if not sampler.grade_ready:
-                    if args.simulate:
-                        # Simulated frame capture
-                        fake_vec = [0.05, 0.20, 0.75]
-                        sampler.record_capture(fake_vec)
-                    elif webcam is not None and classifier is not None:
-                        time.sleep(sampler.settle_s)
-                        vec = webcam.capture_softmax(classifier, sampler.blur_threshold, sampler.min_confidence)
-                        sampler.record_capture(vec)
-                    else:
-                        # Dry run / mock mode fallback
-                        sampler.record_capture([0.05, 0.15, 0.80])
+                    conveyor.update(now)
+                    if not conveyor.busy:
+                        if args.simulate:
+                            # Simulated frame capture
+                            fake_vec = [0.05, 0.20, 0.75]
+                            sampler.record_capture(fake_vec)
+                        elif webcam is not None and classifier is not None:
+                            time.sleep(sampler.settle_s)
+                            vec = webcam.capture_softmax(classifier, sampler.blur_threshold, sampler.min_confidence)
+                            sampler.record_capture(vec)
+                        else:
+                            # Dry run / mock mode fallback
+                            sampler.record_capture([0.05, 0.15, 0.80])
 
-                    if not sampler.grade_ready and sampler.can_jog_forward():
-                        # Advance belt
-                        sampler.step_forward()
+                        if not sampler.grade_ready and sampler.can_jog_forward():
+                            # Advance belt
+                            steps = sampler.step_forward()
+                            if steps > 0:
+                                conveyor.move(steps, hz=grading_cfg.get("sample_hz", 400.0), forward=True, now=now)
 
                 grade_ready = sampler.grade_ready
                 batch_grade = sampler.batch_grade
@@ -445,16 +472,22 @@ def main(argv: list[str] | None = None) -> None:
                 sample_valid_n = sampler.sample_valid_n
                 sample_total_n = sampler.total_attempts
 
+                # Update carriage non-blocking driver
+                carriage_driver.update(now)
+
                 # Phase 2: Carriage positioning & discharge
                 target_bin = controller.operator_grade or batch_grade
                 if target_bin and not carriage_target_reached:
                     if carriage_move_started_at is None:
                         carriage_move_started_at = now
+                        carriage_driver.goto(target_bin, now=now)
+
+                    if carriage_driver.state == "at_target" and carriage_driver.current_bin == target_bin:
+                        carriage_target_reached = True
+                    elif carriage_driver.state == "fault":
+                        sorting_alarms.add("carriage_fault")
                     elif now - carriage_move_started_at >= args.carriage_move_timeout_s:
                         sorting_alarms.add("carriage_move_timeout")
-
-                    # In simulated or mock mode, mark carriage arrived immediately
-                    carriage_target_reached = True
 
                 if carriage_target_reached and target_bin:
                     if discharge_started_at is None:
@@ -469,7 +502,9 @@ def main(argv: list[str] | None = None) -> None:
                     if elapsed_discharge >= (args.discharge_total_steps / args.sample_hz):
                         discharge_complete = True
             else:
-                sampler = None
+                if sampler is not None:
+                    sampler = None
+                    carriage_driver.stop()
 
             sorting_complete = discharge_complete
 
@@ -508,7 +543,22 @@ def main(argv: list[str] | None = None) -> None:
 
             if io is not None:
                 io.apply(commands)
-            conveyor.apply(commands.conveyor, now)
+
+            if commands.state is BatchState.SORTING:
+                if commands.sorting_stage == "discharge" and carriage_target_reached:
+                    conveyor.apply(commands.conveyor, now)
+                elif commands.sorting_stage == "discharge" and not carriage_target_reached:
+                    conveyor.apply(ConveyorCommand.STOP, now)
+                else:
+                    # In sampling / review stage: conveyor is managed by sampler jogs
+                    conveyor.update(now)
+            else:
+                conveyor.apply(commands.conveyor, now)
+
+            if conn is not None and batch_id is not None:
+                if controller.drying_timed_out and not batch_drying_timed_out_saved:
+                    db.set_batch_drying_timed_out(conn, batch_id, True)
+                    batch_drying_timed_out_saved = True
 
             exhaust_ah = (
                 absolute_humidity(exhaust_t, exhaust_rh)
@@ -522,12 +572,15 @@ def main(argv: list[str] | None = None) -> None:
                 if conn is not None:
                     if commands.state is BatchState.INTAKE and last_state in (None, BatchState.IDLE):
                         batch_id = db.start_batch(conn, target_kg=controller.target_kg)
+                        batch_drying_timed_out_saved = False
                         print(f"{stamp()}  batch #{batch_id} opened")
                     elif commands.state in _FINISHED and batch_id is not None:
                         db.finish_batch(conn, batch_id, controller.record(), commands.state.value)
+                        batch_drying_timed_out_saved = False
                         print(f"{stamp()}  batch #{batch_id} written")
                     elif commands.state is BatchState.IDLE:
                         batch_id = None
+                        batch_drying_timed_out_saved = False
                     elif batch_id is not None:
                         db.set_batch_state(conn, batch_id, commands.state.value)
                 last_state = commands.state
@@ -546,6 +599,18 @@ def main(argv: list[str] | None = None) -> None:
                 )
                 # the heartbeat is wall-clock, so it is throttled on real time
                 if state_changed or real - last_live >= args.live_interval:
+                    components_snapshot = {
+                        "conveyor": {
+                            "busy": conveyor.busy,
+                            "position_steps": conveyor.position_steps,
+                            "last_result": conveyor.last_result,
+                        },
+                        "carriage": {
+                            "state": carriage_driver.state,
+                            "current_bin": carriage_driver.current_bin,
+                            "last_fault": carriage_driver.last_fault,
+                        },
+                    }
                     db.update_live(
                         conn,
                         state=commands.state.value,
@@ -556,6 +621,7 @@ def main(argv: list[str] | None = None) -> None:
                         gate_open=commands.gate_open,
                         conveyor=commands.conveyor.value,
                         alarms=commands.alarms,
+                        components=components_snapshot,
                         **readings,
                     )
                     last_live = real
@@ -591,6 +657,7 @@ def main(argv: list[str] | None = None) -> None:
         pass
     finally:
         conveyor.close()
+        carriage_driver.close()
         if io is not None:
             io.close()
         if conn is not None:

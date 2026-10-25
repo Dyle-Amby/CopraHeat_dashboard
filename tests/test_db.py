@@ -64,6 +64,105 @@ class TestSchema(DBCase):
         self.assertNotIn("weight_loss_pct", columns)
         self.assertLessEqual({"chamber_c", "exhaust_c", "exhaust_rh", "exhaust_ah"}, columns)
 
+    def test_migration_from_v2_preserves_data_and_adds_v3_features(self):
+        # Setup a v2 database manually
+        v2_path = Path(self._tmp.name) / "v2.db"
+        conn = db.connect(v2_path)
+        conn.execute("""
+            CREATE TABLE batches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                state TEXT NOT NULL,
+                target_kg REAL,
+                duration_s REAL,
+                drying_s REAL,
+                weight_in_kg REAL,
+                weight_out_kg REAL,
+                weight_loss_pct REAL,
+                aborted INTEGER NOT NULL DEFAULT 0,
+                abort_reason TEXT,
+                alarms TEXT,
+                great REAL,
+                good REAL,
+                bad REAL,
+                final_moisture_pct REAL,
+                batch_grade TEXT,
+                operator_grade TEXT,
+                override_used INTEGER NOT NULL DEFAULT 0,
+                needs_review INTEGER NOT NULL DEFAULT 0,
+                sample_vectors TEXT,
+                sample_valid_n INTEGER NOT NULL DEFAULT 0,
+                sample_total_n INTEGER NOT NULL DEFAULT 0,
+                sorting_config_snapshot TEXT
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE machine_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                updated_at TEXT NOT NULL,
+                supervisor_pid INTEGER,
+                batch_id INTEGER,
+                state TEXT NOT NULL,
+                elapsed_s REAL,
+                chamber_c REAL,
+                exhaust_c REAL,
+                exhaust_rh REAL,
+                exhaust_ah REAL,
+                hopper_kg REAL,
+                target_kg REAL,
+                heater_on INTEGER NOT NULL DEFAULT 0,
+                fans_on INTEGER NOT NULL DEFAULT 0,
+                fan_reason TEXT,
+                gate_open INTEGER NOT NULL DEFAULT 0,
+                conveyor TEXT,
+                alarms TEXT
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+        """)
+        conn.execute("INSERT INTO settings (key, value, updated_at) VALUES ('target_kg', '4.2', '2026-01-01T00:00:00')")
+        conn.execute("INSERT INTO batches (started_at, state, target_kg) VALUES ('2026-01-01T10:00:00', 'complete', 4.2)")
+        conn.execute("PRAGMA user_version = 2")
+
+        # Now run db.init to trigger migration
+        db.init(conn)
+
+        # 1. PRAGMA user_version is 3
+        ver = conn.execute("PRAGMA user_version").fetchone()[0]
+        self.assertEqual(ver, 3)
+
+        # 2. Existing batch preserved and has drying_timed_out = 0
+        b_cols = {r["name"] for r in conn.execute("PRAGMA table_info(batches)")}
+        self.assertIn("drying_timed_out", b_cols)
+        row = conn.execute("SELECT target_kg, drying_timed_out FROM batches WHERE id = 1").fetchone()
+        self.assertEqual(row["target_kg"], 4.2)
+        self.assertEqual(row["drying_timed_out"], 0)
+
+        # 3. Existing setting preserved
+        settings = db.get_settings(conn)
+        self.assertEqual(settings["target_kg"], "4.2")
+
+        # 4. New settings added
+        self.assertIn("conveyor_p00", settings)
+        self.assertIn("chamber_to_camera_steps", settings)
+        self.assertIn("conveyor_hz", settings)
+
+        # 5. calibration_lock table created
+        tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertIn("calibration_lock", tables)
+
+        # 6. machine_state has components column
+        m_cols = {r["name"] for r in conn.execute("PRAGMA table_info(machine_state)")}
+        self.assertIn("components", m_cols)
+
+        conn.close()
+
 
 class TestBatches(DBCase):
     def test_a_batch_row_exists_from_the_start(self):

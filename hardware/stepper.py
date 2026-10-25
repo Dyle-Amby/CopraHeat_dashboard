@@ -5,9 +5,9 @@ thread, so a Python loop never has to keep step timing and a move of N steps is
 exactly N pulses. That thread is still software-timed: keep the rate at a few
 kHz or below, above that jitter shows up as rough motion and lost steps.
 
-Both drivers sit behind the 74HCT245 (non-inverting), PUL-/DIR- to GND, so a
-high GPIO lights the driver's input LED. No acceleration ramp yet: bench rates
-are low enough to start from standstill.
+Both drivers sit behind 2N2222A NPN sinking transistors on PUL/DIR, with
+PUL+ and DIR+ tied to a 5 V rail (common-anode sinking configuration).
+No acceleration ramp yet: bench rates are low enough to start from standstill.
 """
 
 import time
@@ -65,8 +65,17 @@ class Stepper:
 
     def stop(self) -> int:
         """Cut the pulse train; returns the estimated steps sent."""
-        self._lgpio.tx_pulse(self._h, self.pins.pul, 0, 0)
-        self._lgpio.gpio_write(self._h, self.pins.pul, 0)
+        # Calling tx_pulse with 0, 0 triggers LG_BAD_PWM_MICROS error in lgpio.
+        # Stopping software PWM/pulse transmission on RP1 is done cleanly via
+        # tx_pwm with 0 frequency and duty, then driving the pin low.
+        try:
+            self._lgpio.tx_pwm(self._h, self.pins.pul, 0, 0)
+        except Exception:
+            pass
+        try:
+            self._lgpio.gpio_write(self._h, self.pins.pul, 0)
+        except Exception:
+            pass
         if self._started is None:
             return 0
         sent = steps_done(time.monotonic() - self._started, self._hz, self._steps)

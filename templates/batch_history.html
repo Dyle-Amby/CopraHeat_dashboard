@@ -25,7 +25,12 @@
         <td><a href="{{ url_for('sensor_logs', batch=batch.id) }}" title="Sensor logs for this batch">{{ batch.id }}</a></td>
         <td>{{ batch.started_at | date }}</td>
         <td>{{ batch.duration_s | duration }}</td>
-        <td>{{ batch.drying_s | duration }}</td>
+        <td>
+          {{ batch.drying_s | duration }}
+          {% if batch.drying_timed_out %}
+            <span class="badge-timeout-flag" title="Drying ceiling reached (8 h timeout flag)">Timed out</span>
+          {% endif %}
+        </td>
         <td>{{ batch.weight_in_kg | num(2, ' kg') }}</td>
         <td>{{ batch.weight_out_kg | num(2, ' kg') }}</td>
         <td>{{ batch.weight_loss_pct | num(1, '%') }}</td>

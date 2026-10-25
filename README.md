@@ -68,8 +68,9 @@ CopraHeat_dashboard/
 │   ├── limits.py           # Bin-carriage limit switches (NC, internal pull-ups)
 │   ├── carriage.py         # Bin-carriage positioning logic (MoveWatch)
 │   ├── servo.py            # MG996R on hardware PWM (rpi-hardware-pwm)
-│   ├── db.py               # SQLite data layer & schema v2 migrations (Flask ↔ supervisor IPC)
-│   ├── conveyor.py         # Conveyor interface (SimulatedConveyor stand-in)
+│   ├── db.py               # SQLite data layer & schema v3 migrations (Flask ↔ supervisor IPC)
+│   ├── motion.py           # Non-blocking motion layer (conveyor & carriage drivers)
+│   ├── conveyor.py         # Conveyor interface wrappers
 │   ├── simulate.py         # Fake machine for --simulate runs (test fixture, not production)
 │   ├── run_cords.py        # Supervisor: the one process that owns every pin
 │   ├── walkthrough.py      # Guided interactive end-to-end testing with physical hardware/mocking
@@ -171,8 +172,8 @@ python -m hardware.bench sort great bad good       # or run a fixed sequence
 ```
 
 `sort` finds the carriage first: resting on a switch, or homing down to the nearest one. Defaults are
-placeholders until confirmed on the machine: switches bottom → top `--order LS1 LS2 LS3`, bins at
-those stops `--bins great good bad`, and forward = up (`--up-reverse` flips it). Set `--max-steps`
+placeholders until confirmed on the machine: switches bottom → top `--order LS3 LS2 LS1`, bins at
+those stops `--bins bad good great`, and forward = up (`--up-reverse` flips it). Set `--max-steps`
 to a little over the full carriage travel (measure it with `jog`): it is the only cap on the very
 first move if the motor turns out to be wired backwards. After that, each pair of stops gets a cap
 learned from its own first trip.
@@ -220,13 +221,14 @@ All state lives in a SQLite database (`cords.db`, created on first run, git-igno
 |---|---|---|
 | `machine_state` | supervisor | Single-row live snapshot, including a heartbeat so the UI can tell live data from a dead process |
 | `sensor_log` | supervisor | Time series behind the Sensor Logs charts |
-| `batches` | supervisor | One row per batch — inserted at start, updated with v2 batch-level grade consensus, operator override, review flags, sample vectors, and configuration snapshot |
+| `batches` | supervisor | One row per batch — inserted at start, updated with v3 batch-level grade consensus, operator override, review flags, sample vectors, and configuration snapshot |
 | `commands` | Flask | Operator queue (`start`, `end_drying`, `override_grade`, `finish_sorting`, `abort`, `reset`, `set_target_kg`) with per-command results |
 | `settings` | supervisor | Calibration parameters (HX711 scale/offsets, servo angles, vision grading thresholds, belt travel steps) |
+| `calibration_lock` | Flask / supervisor | Exclusivity lock preventing batch starts during maintenance/calibration sessions |
 
 A rejected command keeps the machine's own words (`"cannot start from drying"`), so the dashboard can show why rather than failing silently. Commands are never left waiting for a supervisor that is not there: Flask refuses them with `409`, and anything still pending when a supervisor starts is expired rather than run late.
 
-Schema versioning is guarded by `PRAGMA user_version = 2`. Upgrades from version 1 run automatically or via CLI:
+Schema versioning is guarded by `PRAGMA user_version = 3`. Upgrades from prior versions run automatically or via CLI:
 ```bash
 python -m hardware.db backup   # Creates cords.db.bak.<timestamp>
 python -m hardware.db migrate  # Applies additive columns preserving historical data
@@ -242,7 +244,7 @@ The dashboard is the operator interface for a custom copra processing machine, c
 
 - **Hopper** with an MG996R servo gate, held closed under load and opened when the hopper's HX711 load cell reads the target batch weight
 - **Conveyor** — heat-resistant stainless steel mesh belt, driven by a 57HS82 stepper via an HBS57H driver
-- **Drying chamber** — 3× 220 V ceramic IR heater bulbs switched by a Fotek SSR, with a 60–70 °C two-point hysteresis loop on a DS18B20 probe; 24 V intake/exhaust fans switched together via a Songle relay
+- **Drying chamber** — 3× 220 V ceramic IR heater bulbs switched by a Fotek SSR, with a 60–70 °C two-point hysteresis loop on a DS18B20 probe; 24 V intake/exhaust fans switched together via a relay
 - **Exhaust sensing** — DHT22 inside the chamber by the exhaust fan; its absolute humidity is the drying endpoint signal (there is no ambient sensor)
 - **Computer-vision module** — 1080p USB webcam + MobileNetV3 (`cords_model.tflite`). During the sorting phase, the belt creeps to sample $N$ distinct positions along the batch. Consensus is calculated via soft-voting across valid frames, with a visual contamination guard forcing `Bad` if mould/char exceed threshold $\tau_{\text{bad}}$, and an operator review prompt if low confidence occurs.
 - **Bin carriage** — 57BYGH420 stepper via a TB6600 driver, moving vertically between three bin heights; three normally-closed limit switches act as hard position stops
@@ -260,16 +262,16 @@ The dashboard is the operator interface for a custom copra processing machine, c
 | | DHT22 data | 26 | 37 |
 | Load cells | HX711 Hopper — DOUT / SCK | 7 / 8 | 26 / 24 |
 | | HX711 Bin-Great — DOUT / SCK | 9 / 10 | 21 / 19 |
-| | HX711 Bin-Good — DOUT / SCK | 11 / 12 | 23 / 32 |
+| | HX711 Bin-Good — DOUT / SCK | 15 / 14 | 10 / 8 |
 | | HX711 Bin-Bad — DOUT / SCK | 13 / 16 | 33 / 36 |
 | Motors | TB6600 PUL / DIR (bin carriage) | 17 / 27 | 11 / 13 |
 | | HBS57H PUL / DIR (conveyor) | 22 / 23 | 15 / 16 |
 | Servo | MG996R hopper gate (hardware PWM) | 18 | 12 |
 | Limit switches | Switch 1 / 2 / 3 | 24 / 20 / 21 | 18 / 38 / 40 |
 | Triggers | Fotek SSR (heaters) | 5 | 29 |
-| | Fan relay (via 2N2222) | 6 | 31 |
+| | Fan relay (via 2N2222) | 25 | 22 |
 
-Free: GPIO25 (pin 22). Reserved: GPIO2/3 (I²C), GPIO14/15 (UART), GPIO19 (kept clear for the servo's PWM pair). Never use GPIO0/1 (HAT EEPROM).
+Free: None (GPIO25 drives fan relay, GPIO6 output stage died 2026-10-10). Reserved: GPIO2/3 (I²C), GPIO14/15 (UART), GPIO19 (kept clear for the servo's PWM pair). Never use GPIO0/1 (HAT EEPROM).
 
 **Board and OS requirements**
 
@@ -279,7 +281,7 @@ Free: GPIO25 (pin 22). Reserved: GPIO2/3 (I²C), GPIO14/15 (UART), GPIO19 (kept 
 - DHT22 is read through the kernel IIO driver, not a Python bit-bang library (unreliable on the Pi 5's RP1): add `dtoverlay=dht11,gpiopin=26` to `config.txt` — the `dht11` driver handles DHT22 as well.
 - The servo uses hardware PWM: add `dtoverlay=pwm-2chan` to `config.txt`, then confirm with `pinctrl get 18` and `ls /sys/class/pwm/`. GPIO18 is expected to be chip 2 / channel 2 on the Pi 5 — verify on the bench and pass `--pwm-chip` / `--pwm-channel` to `run_hopper` if different.
 - HX711 tare offsets and scale are per-machine: run `python -m hardware.run_hopper --calibrate` after fabrication and pass the printed flags. The hopper cell is mounted on the gate, so it is tared in both the closed and open positions.
-- Stepper driver inputs (TB6600, HBS57H) are rated 5–24 V, so PUL/DIR go through a **74HCT125 or 74HCT245** buffer (3.3 V in, 5 V out, powered from the Pi's 5 V pin, all OE pins to GND). A BSS138 bidirectional shifter only works here in common-anode wiring (PUL+/DIR+ to 5 V, shifter on PUL−/DIR−, inverted logic) and then sinks the full ~14 mA opto current through the Pi's GPIO pad — acceptable for bench testing, not the final build.
+- Stepper driver inputs (TB6600, HBS57H) use 2N2222A NPN sinking transistors on PUL/DIR, with PUL+ and DIR+ tied to a 5 V rail (common-anode sinking configuration). Relay and SSR triggers use an NPN buffer.
 - Limit switches are wired normally-closed with internal pull-ups, so a broken wire reads as "stop".
 - Use `gpiozero` (lgpio backend). Legacy `RPi.GPIO` does not work on the Pi 5's RP1 GPIO controller.
 

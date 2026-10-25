@@ -3,9 +3,14 @@
 {% block heading %}Control panel{% endblock %}
 
 {% block content %}
-<div class="warning-banner">
+<div class="warning-banner mb-3">
   <i class="bi bi-exclamation-triangle" style="font-size:1.1rem; color:var(--gold);"></i>
   Every action here is a request to the machine. It is checked against the current phase and refused, with a reason, if it does not apply.
+</div>
+
+<div id="calibrationBanner" class="alert alert-warning d-none mb-3" style="border-left: 4px solid var(--gold); background: rgba(224, 168, 0, 0.1);" role="alert">
+  <i class="bi bi-wrench-adjustable me-2"></i>
+  <strong>Calibration in progress.</strong> A maintenance/calibration session is currently active. Batch start is locked until calibration is completed or released.
 </div>
 
 <div class="row g-4">
@@ -37,7 +42,7 @@
           <span class="override-label">Start batch</span>
           <span class="override-sub">Begins intake: fill the hopper, dispense, carry the batch into the chamber</span>
         </div>
-        <button class="btn-ink cp-btn" data-command="start">Start</button>
+        <button class="btn-ink cp-btn" data-command="start" id="startBtn">Start</button>
       </div>
 
       <div class="override-row">

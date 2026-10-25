@@ -12,19 +12,17 @@ transaction short.
 Connections are not shared between threads: open one per process, or per request
 under Flask -- opening a SQLite connection is cheap.
 
-There is no migration framework. `PRAGMA user_version` guards the schema, and a
-mismatch asks you to delete the file; that is honest for a project that has never
-shipped a second schema.
+PRAGMA user_version guards the schema with additive migrations.
 """
 
+from datetime import datetime, timedelta
 import json
-import sqlite3
-from datetime import datetime
 from pathlib import Path
+import sqlite3
 
 from hardware.batch import COMMAND_NAMES, BatchRecord
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # app.py must run from inside CopraHeat_dashboard, but the supervisor may not,
 # so anchor the default to this file rather than the working directory
@@ -33,6 +31,24 @@ DEFAULT_PATH = Path(__file__).resolve().parent.parent / "cords.db"
 PENDING = "pending"
 DONE = "done"
 REJECTED = "rejected"
+
+# Recognized maintenance and process commands
+VALID_COMMAND_NAMES = COMMAND_NAMES | frozenset({
+    "acquire_calibration_lock",
+    "release_calibration_lock",
+    "jog_conveyor",
+    "stop_conveyor",
+    "save_conveyor_leg",
+    "set_conveyor_p00",
+    "mark_conveyor_stale",
+    "goto_carriage_bin",
+    "home_carriage",
+    "test_carriage_limits",
+    "tare_hopper",
+    "calibrate_hopper_scale",
+    "set_hopper_servo",
+    "test_component",
+})
 
 DEFAULT_SETTINGS = {
     "target_kg": "2.0",
@@ -66,6 +82,13 @@ DEFAULT_SETTINGS = {
     # Measure with: python -m hardware.bench jog conveyor --steps 500 --hz 400
     # then save with: python -m hardware.run_cords --save-settings --hopper-to-chamber-steps <N>
     "hopper_to_chamber_steps": "0",
+    "chamber_to_camera_steps": "0",
+    "conveyor_p00": "10000",
+    "conveyor_hz": "400.0",
+    "conveyor_cal_stale": "0",
+    "leg_hopper_to_chamber_meta": "{}",
+    "leg_chamber_to_camera_meta": "{}",
+    "leg_camera_to_discharge_meta": "{}",
     "intake_advance_timeout_s": "30.0",
     # Fan pulse & warm-up airflow configuration
     "fan_warmup_s": "1200.0",
@@ -103,7 +126,9 @@ CREATE TABLE IF NOT EXISTS batches (
     sample_vectors          TEXT,
     sample_valid_n          INTEGER NOT NULL DEFAULT 0,
     sample_total_n          INTEGER NOT NULL DEFAULT 0,
-    sorting_config_snapshot TEXT
+    sorting_config_snapshot TEXT,
+    -- v3 additive batch column for non-aborting 8 h ceiling
+    drying_timed_out        INTEGER NOT NULL DEFAULT 0
 );
 
 -- No ambient column and no live moisture or weight-loss column: there is no
@@ -155,13 +180,22 @@ CREATE TABLE IF NOT EXISTS machine_state (
     fan_reason     TEXT,
     gate_open      INTEGER NOT NULL DEFAULT 0,
     conveyor       TEXT,
-    alarms         TEXT
+    alarms         TEXT,
+    components     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS settings (
     key        TEXT PRIMARY KEY,
     value      TEXT NOT NULL,
     updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS calibration_lock (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    acquired_at TEXT NOT NULL,
+    expires_at  TEXT NOT NULL,
+    session_id  TEXT,
+    component   TEXT
 );
 """
 
@@ -199,43 +233,88 @@ def backup_db(db_path: Path | str | None = None) -> Path:
 def migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
     """Migrate schema from version 1 to 2 by adding batch-level vision grading columns."""
     cur = conn.cursor()
-    # Check if batch_grade column already exists
-    cur.execute("PRAGMA table_info(batches)")
-    columns = [row[1] for row in cur.fetchall()]
-    new_cols = [
-        ("batch_grade", "TEXT"),
-        ("operator_grade", "TEXT"),
-        ("override_used", "INTEGER NOT NULL DEFAULT 0"),
-        ("needs_review", "INTEGER NOT NULL DEFAULT 0"),
-        ("sample_vectors", "TEXT"),
-        ("sample_valid_n", "INTEGER NOT NULL DEFAULT 0"),
-        ("sample_total_n", "INTEGER NOT NULL DEFAULT 0"),
-        ("sorting_config_snapshot", "TEXT"),
-    ]
-    for col_name, col_type in new_cols:
-        if col_name not in columns:
-            cur.execute(f"ALTER TABLE batches ADD COLUMN {col_name} {col_type}")
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='batches'")
+    if cur.fetchone() is not None:
+        cur.execute("PRAGMA table_info(batches)")
+        columns = [row[1] for row in cur.fetchall()]
+        new_cols = [
+            ("batch_grade", "TEXT"),
+            ("operator_grade", "TEXT"),
+            ("override_used", "INTEGER NOT NULL DEFAULT 0"),
+            ("needs_review", "INTEGER NOT NULL DEFAULT 0"),
+            ("sample_vectors", "TEXT"),
+            ("sample_valid_n", "INTEGER NOT NULL DEFAULT 0"),
+            ("sample_total_n", "INTEGER NOT NULL DEFAULT 0"),
+            ("sorting_config_snapshot", "TEXT"),
+        ]
+        for col_name, col_type in new_cols:
+            if col_name not in columns:
+                cur.execute(f"ALTER TABLE batches ADD COLUMN {col_name} {col_type}")
     conn.execute("PRAGMA user_version = 2")
+
+
+def migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+    """Migrate schema from version 2 to 3 by adding components, drying_timed_out, and calibration_lock."""
+    cur = conn.cursor()
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='batches'")
+    if cur.fetchone() is not None:
+        cur.execute("PRAGMA table_info(batches)")
+        b_cols = [row[1] for row in cur.fetchall()]
+        if "drying_timed_out" not in b_cols:
+            cur.execute("ALTER TABLE batches ADD COLUMN drying_timed_out INTEGER NOT NULL DEFAULT 0")
+
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='machine_state'")
+    if cur.fetchone() is not None:
+        cur.execute("PRAGMA table_info(machine_state)")
+        m_cols = [row[1] for row in cur.fetchall()]
+        if "components" not in m_cols:
+            cur.execute("ALTER TABLE machine_state ADD COLUMN components TEXT")
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS calibration_lock (
+        id          INTEGER PRIMARY KEY CHECK (id = 1),
+        acquired_at TEXT NOT NULL,
+        expires_at  TEXT NOT NULL,
+        session_id  TEXT,
+        component   TEXT
+    );
+    """)
+
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'")
+    if cur.fetchone() is not None:
+        stamp = now_iso()
+        cur.executemany(
+            "INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)",
+            [(k, v, stamp) for k, v in DEFAULT_SETTINGS.items()],
+        )
+    conn.execute("PRAGMA user_version = 3")
 
 
 def _ensure_fan_reason_columns(conn: sqlite3.Connection) -> None:
     """Add fan_reason column to sensor_log and machine_state if missing."""
     cur = conn.cursor()
-    cur.execute("PRAGMA table_info(sensor_log)")
-    s_cols = [row[1] for row in cur.fetchall()]
-    if s_cols and "fan_reason" not in s_cols:
-        cur.execute("ALTER TABLE sensor_log ADD COLUMN fan_reason TEXT")
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sensor_log'")
+    if cur.fetchone() is not None:
+        cur.execute("PRAGMA table_info(sensor_log)")
+        s_cols = [row[1] for row in cur.fetchall()]
+        if s_cols and "fan_reason" not in s_cols:
+            cur.execute("ALTER TABLE sensor_log ADD COLUMN fan_reason TEXT")
 
-    cur.execute("PRAGMA table_info(machine_state)")
-    m_cols = [row[1] for row in cur.fetchall()]
-    if m_cols and "fan_reason" not in m_cols:
-        cur.execute("ALTER TABLE machine_state ADD COLUMN fan_reason TEXT")
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='machine_state'")
+    if cur.fetchone() is not None:
+        cur.execute("PRAGMA table_info(machine_state)")
+        m_cols = [row[1] for row in cur.fetchall()]
+        if m_cols and "fan_reason" not in m_cols:
+            cur.execute("ALTER TABLE machine_state ADD COLUMN fan_reason TEXT")
 
 
 def init(conn: sqlite3.Connection) -> None:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version == 1:
         migrate_v1_to_v2(conn)
+        migrate_v2_to_v3(conn)
+    elif version == 2:
+        migrate_v2_to_v3(conn)
     elif version not in (0, SCHEMA_VERSION):
         raise RuntimeError(
             f"database schema is version {version}, this build expects {SCHEMA_VERSION}. "
@@ -266,6 +345,13 @@ def _row_to_dict(row: sqlite3.Row | None) -> dict | None:
         out["override_used"] = bool(out["override_used"])
     if "needs_review" in out:
         out["needs_review"] = bool(out["needs_review"])
+    if "drying_timed_out" in out:
+        out["drying_timed_out"] = bool(out["drying_timed_out"])
+    if "components" in out and out["components"]:
+        try:
+            out["components"] = json.loads(out["components"])
+        except Exception:
+            pass
     return out
 
 
@@ -273,8 +359,6 @@ def _row_to_dict(row: sqlite3.Row | None) -> dict | None:
 
 
 def start_batch(conn: sqlite3.Connection, *, target_kg: float, state: str = "intake") -> int:
-    """Insert the row at batch start, not at finish: the dashboard needs the
-    batch number and elapsed time while the batch is still running."""
     cur = conn.execute(
         "INSERT INTO batches (started_at, state, target_kg) VALUES (?, ?, ?)",
         (now_iso(), state, target_kg),
@@ -283,17 +367,19 @@ def start_batch(conn: sqlite3.Connection, *, target_kg: float, state: str = "int
 
 
 def set_batch_state(conn: sqlite3.Connection, batch_id: int, state: str) -> None:
-    """Keep a running batch's row on its current phase, so history and the
-    batch picker do not show 'intake' for a batch that is drying."""
     conn.execute(
         "UPDATE batches SET state = ? WHERE id = ? AND finished_at IS NULL", (state, batch_id)
     )
 
 
+def set_batch_drying_timed_out(conn: sqlite3.Connection, batch_id: int, timed_out: bool = True) -> None:
+    conn.execute(
+        "UPDATE batches SET drying_timed_out = ? WHERE id = ?",
+        (int(timed_out), batch_id),
+    )
+
+
 def mark_interrupted_batches(conn: sqlite3.Connection) -> int:
-    """Called at supervisor startup. A batch row with no `finished_at` means the
-    process died or was stopped mid-run; without this the dashboard would show a
-    phantom batch running forever. Returns how many were closed out."""
     cur = conn.execute(
         """UPDATE batches
               SET finished_at = ?, state = 'interrupted', aborted = 1,
@@ -312,7 +398,8 @@ def finish_batch(conn: sqlite3.Connection, batch_id: int, record: BatchRecord, s
                aborted = ?, abort_reason = ?, alarms = ?,
                batch_grade = ?, operator_grade = ?, override_used = ?,
                needs_review = ?, sample_vectors = ?, sample_valid_n = ?,
-               sample_total_n = ?, sorting_config_snapshot = ?
+               sample_total_n = ?, sorting_config_snapshot = ?,
+               drying_timed_out = ?
            WHERE id = ?""",
         (
             now_iso(),
@@ -333,6 +420,7 @@ def finish_batch(conn: sqlite3.Connection, batch_id: int, record: BatchRecord, s
             record.sample_valid_n,
             record.sample_total_n,
             record.sorting_config_snapshot,
+            int(getattr(record, "drying_timed_out", False)),
             batch_id,
         ),
     )
@@ -385,27 +473,25 @@ def update_live(
     gate_open: bool = False,
     conveyor: str | None = None,
     alarms: frozenset[str] | list[str] | None = None,
+    components: dict | str | None = None,
 ) -> None:
-    """Single-row snapshot the dashboard polls. `updated_at` doubles as the
-    supervisor's heartbeat, so the UI can tell live data from a dead process."""
+    comp_json = json.dumps(components) if isinstance(components, dict) else (components or "{}")
     conn.execute(
         """INSERT OR REPLACE INTO machine_state
                (id, updated_at, supervisor_pid, batch_id, state, elapsed_s,
                 chamber_c, exhaust_c, exhaust_rh, exhaust_ah, hopper_kg, target_kg,
-                heater_on, fans_on, fan_reason, gate_open, conveyor, alarms)
-           VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                heater_on, fans_on, fan_reason, gate_open, conveyor, alarms, components)
+           VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             now_iso(), supervisor_pid, batch_id, state, elapsed_s,
             chamber_c, exhaust_c, exhaust_rh, exhaust_ah, hopper_kg, target_kg,
             int(heater_on), int(fans_on), fan_reason, int(gate_open), conveyor,
-            json.dumps(sorted(alarms or [])),
+            json.dumps(sorted(alarms or [])), comp_json,
         ),
     )
 
 
 def mark_supervisor_stopped(conn: sqlite3.Connection) -> None:
-    """Clear the pid on a clean shutdown, so the dashboard can say 'stopped'
-    rather than leaving the operator to infer it from a stale heartbeat."""
     conn.execute("UPDATE machine_state SET supervisor_pid = NULL, updated_at = ? WHERE id = 1", (now_iso(),))
 
 
@@ -414,8 +500,8 @@ def mark_supervisor_stopped(conn: sqlite3.Connection) -> None:
 
 def queue_command(conn: sqlite3.Connection, name: str, payload: str | None = None) -> int:
     """Flask side. Returns the id to poll for the machine's answer."""
-    if name not in COMMAND_NAMES:
-        raise ValueError(f"unknown command {name!r}; expected one of {sorted(COMMAND_NAMES)}")
+    if name not in VALID_COMMAND_NAMES:
+        raise ValueError(f"unknown command {name!r}; expected one of {sorted(VALID_COMMAND_NAMES)}")
     cur = conn.execute(
         "INSERT INTO commands (created_at, name, payload) VALUES (?, ?, ?)",
         (now_iso(), name, payload),
@@ -424,7 +510,6 @@ def queue_command(conn: sqlite3.Connection, name: str, payload: str | None = Non
 
 
 def pending_commands(conn: sqlite3.Connection) -> list[dict]:
-    """Supervisor side, oldest first."""
     rows = conn.execute(
         "SELECT * FROM commands WHERE status = ? ORDER BY id", (PENDING,)
     ).fetchall()
@@ -441,9 +526,6 @@ def resolve_command(conn: sqlite3.Connection, command_id: int, status: str, resu
 
 
 def expire_pending_commands(conn: sqlite3.Connection) -> int:
-    """Called at supervisor startup. Anything still pending was queued while no
-    supervisor was listening; running it now would fire an hours-old Start or
-    Abort at whatever the machine happens to be doing. Returns how many."""
     cur = conn.execute(
         "UPDATE commands SET status = ?, result = ?, resolved_at = ? WHERE status = ?",
         (REJECTED, "expired: the supervisor was not running when this was sent", now_iso(), PENDING),
@@ -452,17 +534,70 @@ def expire_pending_commands(conn: sqlite3.Connection) -> int:
 
 
 def command_status(conn: sqlite3.Connection, command_id: int) -> dict | None:
-    """Flask polls this so a refused command shows the machine's own words."""
     row = conn.execute("SELECT * FROM commands WHERE id = ?", (command_id,)).fetchone()
     return dict(row) if row is not None else None
+
+
+# --- calibration lock --------------------------------------------------------
+
+
+def acquire_calibration_lock(
+    conn: sqlite3.Connection,
+    duration_s: float = 300.0,
+    component: str | None = None,
+    session_id: str | None = None,
+) -> bool:
+    now = datetime.now()
+    row = conn.execute("SELECT * FROM calibration_lock WHERE id = 1").fetchone()
+    if row is not None:
+        try:
+            exp = datetime.fromisoformat(row["expires_at"])
+            if now < exp:
+                if session_id is not None and row["session_id"] == session_id:
+                    pass
+                else:
+                    return False
+        except Exception:
+            pass
+    expires_at = (now + timedelta(seconds=duration_s)).isoformat(timespec="seconds")
+    conn.execute(
+        """INSERT OR REPLACE INTO calibration_lock
+               (id, acquired_at, expires_at, session_id, component)
+           VALUES (1, ?, ?, ?, ?)""",
+        (now.isoformat(timespec="seconds"), expires_at, session_id, component),
+    )
+    return True
+
+
+def release_calibration_lock(conn: sqlite3.Connection, session_id: str | None = None) -> bool:
+    if session_id is not None:
+        cur = conn.execute("DELETE FROM calibration_lock WHERE id = 1 AND session_id = ?", (session_id,))
+        return cur.rowcount > 0
+    conn.execute("DELETE FROM calibration_lock WHERE id = 1")
+    return True
+
+
+def get_calibration_lock(conn: sqlite3.Connection) -> dict | None:
+    row = conn.execute("SELECT * FROM calibration_lock WHERE id = 1").fetchone()
+    if row is None:
+        return None
+    try:
+        if datetime.now() >= datetime.fromisoformat(row["expires_at"]):
+            conn.execute("DELETE FROM calibration_lock WHERE id = 1")
+            return None
+    except Exception:
+        return None
+    return dict(row)
+
+
+def is_calibration_locked(conn: sqlite3.Connection) -> bool:
+    return get_calibration_lock(conn) is not None
 
 
 # --- dashboard reads ---------------------------------------------------------
 
 
 def live_state(conn: sqlite3.Connection, *, stale_after_s: float = 10.0) -> dict | None:
-    """The snapshot plus `age_s`, `stale` and `running`. None if the supervisor
-    has never run against this database."""
     row = conn.execute("SELECT * FROM machine_state WHERE id = 1").fetchone()
     if row is None:
         return None
@@ -489,7 +624,6 @@ def get_batch(conn: sqlite3.Connection, batch_id: int) -> dict | None:
 def batch_samples(
     conn: sqlite3.Connection, batch_id: int, limit: int | None = None, after_id: int | None = None
 ) -> list[dict]:
-    """`after_id` lets a live chart fetch only the rows it has not seen yet."""
     sql = "SELECT * FROM sensor_log WHERE batch_id = ?"
     params: tuple = (batch_id,)
     if after_id is not None:
