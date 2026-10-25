@@ -13,6 +13,7 @@ from datetime import datetime
 from flask import Flask, g, jsonify, render_template, request
 
 from hardware import db
+from hardware.service import get_supervisor_service, CONFIRMATION_PHRASE
 from hardware.batch import COMMAND_NAMES
 
 ABORT_REASON_MAX = 200
@@ -131,7 +132,11 @@ def fmt_num(value, digits: int = 1, unit: str = "") -> str:
 
 def create_app(db_path=None) -> Flask:
     app = Flask(__name__)
-    app.config["DB_PATH"] = db_path or os.environ.get("CORDS_DB") or db.DEFAULT_PATH
+    if isinstance(db_path, dict):
+        app.config.update(db_path)
+        app.config["DB_PATH"] = app.config.get("DB_PATH") or app.config.get("DATABASE") or db.DEFAULT_PATH
+    else:
+        app.config["DB_PATH"] = db_path or os.environ.get("CORDS_DB") or db.DEFAULT_PATH
 
     # create the tables up front, so the pages work before the supervisor has
     # ever run instead of erroring on a missing table
@@ -295,6 +300,89 @@ def create_app(db_path=None) -> Flask:
         if row is None:
             return json_error(404, f"no command #{command_id}")
         return jsonify(row)
+
+    # --- supervisor lifecycle API ------------------------------------------
+
+    @app.get("/api/supervisor")
+    def api_supervisor_status():
+        svc = get_supervisor_service()
+        status = svc.get_status(get_conn())
+        return jsonify(status)
+
+    @app.post("/api/supervisor/start")
+    def api_supervisor_start():
+        required_pin = os.environ.get("CORDS_PIN")
+        body = request.get_json(silent=True) or {}
+        if required_pin:
+            given_pin = request.headers.get("X-CORDS-PIN") or body.get("pin")
+            if given_pin != required_pin:
+                return json_error(403, "invalid or missing PIN")
+
+        svc = get_supervisor_service()
+        status = svc.get_status(get_conn())
+        if status["active"]:
+            return json_error(409, "supervisor is already running")
+
+        ok, msg = svc.start_service()
+        if not ok:
+            return json_error(500, msg)
+        return jsonify({"status": "started", "message": msg, "supervisor": svc.get_status(get_conn())}), 200
+
+    @app.post("/api/supervisor/stop")
+    def api_supervisor_stop():
+        required_pin = os.environ.get("CORDS_PIN")
+        body = request.get_json(silent=True) or {}
+        if required_pin:
+            given_pin = request.headers.get("X-CORDS-PIN") or body.get("pin")
+            if given_pin != required_pin:
+                return json_error(403, "invalid or missing PIN")
+
+        svc = get_supervisor_service()
+        status = svc.get_status(get_conn())
+        if not status["active"]:
+            return json_error(409, "supervisor is already stopped")
+
+        if status.get("batch_active"):
+            confirm = str(body.get("confirm", "")).strip()
+            if confirm != CONFIRMATION_PHRASE:
+                return json_error(
+                    409,
+                    f"Batch is currently running ({status.get('batch_state')}). "
+                    f"Stopping will interrupt the batch and shut off heaters and fans while the chamber may be hot. "
+                    f"Type '{CONFIRMATION_PHRASE}' to confirm."
+                )
+
+        ok, msg = svc.stop_service()
+        if not ok:
+            return json_error(500, msg)
+        return jsonify({"status": "stopped", "message": msg, "supervisor": svc.get_status(get_conn())}), 200
+
+    @app.post("/api/supervisor/restart")
+    def api_supervisor_restart():
+        required_pin = os.environ.get("CORDS_PIN")
+        body = request.get_json(silent=True) or {}
+        if required_pin:
+            given_pin = request.headers.get("X-CORDS-PIN") or body.get("pin")
+            if given_pin != required_pin:
+                return json_error(403, "invalid or missing PIN")
+
+        svc = get_supervisor_service()
+        status = svc.get_status(get_conn())
+
+        if status.get("batch_active"):
+            confirm = str(body.get("confirm", "")).strip()
+            if confirm != CONFIRMATION_PHRASE:
+                return json_error(
+                    409,
+                    f"Batch is currently running ({status.get('batch_state')}). "
+                    f"Restarting will interrupt the batch and shut off heaters and fans while the chamber may be hot. "
+                    f"Type '{CONFIRMATION_PHRASE}' to confirm."
+                )
+
+        ok, msg = svc.restart_service()
+        if not ok:
+            return json_error(500, msg)
+        return jsonify({"status": "restarted", "message": msg, "supervisor": svc.get_status(get_conn())}), 200
 
     @app.errorhandler(404)
     def not_found(exc):

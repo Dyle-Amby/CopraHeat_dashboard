@@ -1,0 +1,39 @@
+# systemd USER unit file for the CORDS hardware supervisor.
+#
+# IMPORTANT RULES & DEPLOYMENT INSTRUCTIONS:
+# 1. This service must NEVER be enabled at boot (`systemctl --user enable` is forbidden).
+#    It is started, stopped, and restarted strictly on operator demand from the dashboard.
+# 2. Lingering must be enabled on the Raspberry Pi so the user systemd daemon stays active:
+#      loginctl enable-linger <username>
+# 3. All hardware configuration and calibration values are loaded directly from the database
+#    settings table (settings table PRAGMA user_version 3), so no CLI flags are required.
+# 4. Stopping sends SIGTERM. The supervisor has 20 seconds (TimeoutStopSec=20) to run its
+#    clean exit / shutdown handler (closing steppers, limits, turning off heaters/fans,
+#    and marking interrupted batches).
+# 5. Flask access requirement:
+#    If Flask runs as a daemon or web service, it must access the user systemd bus:
+#      export XDG_RUNTIME_DIR=/run/user/$(id -u)
+#      export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
+#
+# INSTALLATION:
+#   mkdir -p ~/.config/systemd/user/
+#   cp cords-supervisor.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   # DO NOT RUN: systemctl --user enable cords-supervisor.service
+
+[Unit]
+Description=CORDS Hardware Supervisor (Batch & Actuator Controller)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Documents/College/THESIS/cords_dashboard/CopraHeat_dashboard
+ExecStart=/usr/bin/python3 -m hardware.run_cords
+Restart=no
+KillSignal=SIGTERM
+TimeoutStopSec=20
+SendSIGKILL=yes
+
+[Install]
+# Intentionally omitted / left unaliased:
+# This service is an operator-controlled user unit and must never be auto-started at boot.

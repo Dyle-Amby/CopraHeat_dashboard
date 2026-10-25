@@ -95,4 +95,91 @@ document.addEventListener('DOMContentLoaded', function () {
     await run('set_target_kg', $('targetInput').value);
     $('targetInput').blur();
   });
+
+  // --- Supervisor Service Card Controls -------------------------------------
+  const supervisorBadge = $('supervisorBadge');
+  const supervisorSubstate = $('supervisorSubstate');
+  const supervisorStartBtn = $('supervisorStartBtn');
+  const supervisorStopBtn = $('supervisorStopBtn');
+  const supervisorRestartBtn = $('supervisorRestartBtn');
+  const supervisorFeedbackEl = $('supervisorFeedback');
+
+  function supervisorFeedback(message, kind) {
+    if (!supervisorFeedbackEl) return;
+    supervisorFeedbackEl.textContent = message;
+    supervisorFeedbackEl.dataset.kind = kind;
+  }
+
+  async function pollSupervisor() {
+    try {
+      const res = await fetch('/api/supervisor');
+      if (!res.ok) return;
+      const data = await res.json();
+      updateSupervisorUI(data);
+    } catch (_) {}
+  }
+
+  function updateSupervisorUI(data) {
+    if (!supervisorBadge || !supervisorSubstate) return;
+    const active = data.active && data.heartbeat_ok;
+    supervisorBadge.textContent = active ? 'Running' : (data.active ? 'Unresponsive' : 'Stopped');
+    supervisorBadge.dataset.state = active ? 'running' : 'offline';
+
+    let sub = data.substate || (data.active ? 'running' : 'stopped');
+    if (data.pid) sub += ` (PID ${data.pid})`;
+    if (data.active && !data.heartbeat_ok) sub += ' [stale heartbeat]';
+    supervisorSubstate.textContent = sub;
+
+    if (supervisorStartBtn) supervisorStartBtn.disabled = data.active;
+    if (supervisorStopBtn) supervisorStopBtn.disabled = !data.active;
+    if (supervisorRestartBtn) supervisorRestartBtn.disabled = !data.active;
+  }
+
+  async function handleSupervisorAction(action) {
+    supervisorFeedback('Sending ' + action + '…', 'pending');
+    let payload = {};
+
+    const activeBatch = live && ['intake', 'drying', 'cooldown', 'sorting'].includes(live.state);
+    if ((action === 'stop' || action === 'restart') && activeBatch) {
+      const phrase = window.prompt(
+        `A batch is currently running (${live.state}).\n\n` +
+        `Stopping or restarting the supervisor will interrupt the batch and shut off heaters and fans while the chamber may be hot.\n\n` +
+        `Type "INTERRUPT BATCH" to confirm:`
+      );
+      if (phrase !== 'INTERRUPT BATCH') {
+        supervisorFeedback('Action cancelled: confirmation not matched.', 'refused');
+        return;
+      }
+      payload.confirm = phrase;
+    }
+
+    try {
+      const res = await fetch(`/api/supervisor/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (res.ok) {
+        supervisorFeedback(data.message || action + ' succeeded', 'ok');
+      } else {
+        supervisorFeedback(data.error || 'Failed: ' + res.statusText, 'refused');
+      }
+      if (data.supervisor) {
+        updateSupervisorUI(data.supervisor);
+      } else {
+        await pollSupervisor();
+      }
+    } catch (err) {
+      supervisorFeedback('Network error: ' + err.message, 'refused');
+    }
+  }
+
+  if (supervisorStartBtn) supervisorStartBtn.addEventListener('click', () => handleSupervisorAction('start'));
+  if (supervisorStopBtn) supervisorStopBtn.addEventListener('click', () => handleSupervisorAction('stop'));
+  if (supervisorRestartBtn) supervisorRestartBtn.addEventListener('click', () => handleSupervisorAction('restart'));
+
+  setInterval(pollSupervisor, 4000);
+  pollSupervisor();
+
 });

@@ -94,7 +94,27 @@
   </div>
 
   <div class="col-lg-5">
-    <div class="card-panel h-100 d-flex flex-column justify-content-between">
+    <div class="card-panel mb-4">
+      <h6 class="card-eyebrow">Supervisor Service</h6>
+      <p style="font-size:0.85rem; color:var(--muted); margin-bottom: 12px;">Process lifecycle for hardware supervisor daemon. Started on demand; never enabled at boot.</p>
+
+      <div class="d-flex align-items-center justify-content-between mb-3 p-2 rounded" style="background: var(--cream-2);">
+        <div>
+          <span class="override-label d-block" style="font-size:0.85rem;">Daemon Status</span>
+          <span class="override-sub" id="supervisorSubstate">Checking...</span>
+        </div>
+        <span class="state-badge" id="supervisorBadge" data-state="offline">Offline</span>
+      </div>
+
+      <div class="d-flex gap-2 mb-2">
+        <button class="btn-ink flex-fill" id="supervisorStartBtn"><i class="bi bi-play-fill me-1"></i>Start</button>
+        <button class="btn-outline-ink flex-fill" id="supervisorStopBtn"><i class="bi bi-stop-fill me-1"></i>Stop</button>
+        <button class="btn-outline-ink flex-fill" id="supervisorRestartBtn"><i class="bi bi-arrow-repeat me-1"></i>Restart</button>
+      </div>
+      <p class="cmd-feedback mb-0" id="supervisorFeedback" role="status" aria-live="polite"></p>
+    </div>
+
+    <div class="card-panel">
       <div>
         <h6 class="card-eyebrow">Abort batch</h6>
         <p style="font-size:0.85rem; color:var(--muted);">Stops the batch in software. Heaters go off at once; a hot chamber is purged through cooldown before the batch is marked aborted, so the fans may keep running.</p>
