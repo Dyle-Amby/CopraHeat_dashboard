@@ -226,6 +226,10 @@ def create_app(db_path=None) -> Flask:
     def control_panel():
         return render_template("control_panel.html", active_page="control")
 
+    @app.route("/components")
+    def components():
+        return render_template("components.html", active_page="components")
+    
     # --- read API ----------------------------------------------------------
 
     @app.get("/api/live")

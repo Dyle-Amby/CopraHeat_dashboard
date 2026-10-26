@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+{% block title %}Components & Calibration{% endblock %}
+{% block heading %}Components &amp; Calibration{% endblock %}
+
+{% block content %}
+
+<!-- Calibration lock banner (hidden until JS detects a lock) -->
+<div id="calLockBanner" class="alert alert-warning d-none mb-3" role="alert">
+    <i class="bi bi-lock-fill"></i>
+    <strong>Calibration in progress</strong> — another session holds the calibration
+    lock.
+</div>
+
+<!-- Tab navigation -->
+<ul class="nav nav-tabs mb-3" id="componentTabs" role="tablist">
+    <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab"
+            data-bs-target="#tab-hopper">Hopper</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-conveyor">Conveyor</button>
+    </li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-carriage">Carriage</button>
+    </li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-chamber">Drying
+            Chamber</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-camera">Camera</button></li>
+</ul>
+
+<div class="tab-content" id="componentTabContent">
+
+    <!-- 1. HOPPER TAB -->
+    <div class="tab-pane fade show active" id="tab-hopper">
+        <section class="card mb-3">
+            <div class="card-header fw-bold">Status</div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <span class="text-muted">Hopper Load Cell (HX711)</span><br>
+                        <span id="h-hopper-cell" class="badge bg-secondary">—</span>
+                        <div class="mt-1">Weight: <strong id="h-hopper-kg">—</strong> kg</div>
+                    </div>
+                    <div class="col-md-6">
+                        <span class="text-muted">Gate Servo</span><br>
+                        <span id="h-servo-state" class="badge bg-secondary">Unverified (output
+                            only)</span>
+                        <div class="mt-1">Gate: <strong id="h-gate-state">—</strong></div>
+                        <small class="text-muted" id="h-servo-last">Last: —</small>
+                    </div>
+                </div>
+            </div>
+        </section>
+        <section class="card mb-3 d-none" id="hopper-cal-zone">
+            <div class="card-header">Calibration</div>
+            <div class="card-body"><em>Available in Phase 3.</em></div>
+        </section>
+        <section class="card mb-3 d-none" id="hopper-test-zone">
+            <div class="card-header">Manual Tests</div>
+            <div class="card-body"><em>Available in Phase 3.</em></div>
+        </section>
+    </div>
+
+    <!-- 2. CONVEYOR TAB -->
+    <div class="tab-pane fade" id="tab-conveyor">
+        <section class="card mb-3">
+            <div class="card-header fw-bold">Status</div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <span class="text-muted">Stepper Driver</span><br>
+                        <span id="c-stepper-state" class="badge bg-secondary">Unverified (output
+                            only)</span>
+                        <div class="small text-muted mt-1" id="c-stepper-last">Last: —</div>
+                    </div>
+                    <div class="col-md-4">
+                        <span class="text-muted">Motion State</span><br>
+                        <span id="c-motion-state">—</span>
+                        <div class="small text-muted mt-1">Result: <span id="c-last-cmd">—</span></div>
+                    </div>
+                    <div class="col-md-4">
+                        <span class="text-muted">Position</span><br>
+                        <strong id="c-position">—</strong> steps
+                    </div>
+                </div>
+            </div>
+        </section>
+        <section class="card mb-3 d-none" id="conveyor-cal-zone">
+            <div class="card-header">Calibration</div>
+            <div class="card-body"><em>Available in Phase 4.</em></div>
+        </section>
+        <section class="card mb-3 d-none" id="conveyor-test-zone">
+            <div class="card-header">Manual Tests</div>
+            <div class="card-body"><em>Available in Phase 4.</em></div>
+        </section>
+    </div>
+
+    <!-- 3. CARRIAGE TAB -->
+    <div class="tab-pane fade" id="tab-carriage">
+        <section class="card mb-3">
+            <div class="card-header fw-bold">Status</div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <span class="text-muted">Stepper Driver</span><br>
+                        <span id="car-stepper-state" class="badge bg-secondary">Unverified
+                            (output only)</span>
+                        <div class="small text-muted mt-1" id="car-stepper-last">Last: —</div>
+                    </div>
+                    <div class="col-md-4">
+                        <span class="text-muted">Current Bin Position</span><br>
+                        <strong id="car-bin">—</strong>
+                    </div>
+                    <div class="col-md-4">
+                        <span class="text-muted">Last Bin Trigger</span><br>
+                        <span id="car-last-trigger">—</span>
+                    </div>
+                </div>
+
+                <h6 class="text-muted mt-4 mb-2">Limit Switches (NC with pull-ups)</h6>
+                <div class="row g-3">
+                    <div class="col-sm-4"><span class="text-muted">LS1 (Great
+                            top)</span><br><span id="car-ls1">—</span></div>
+                    <div class="col-sm-4"><span class="text-muted">LS2 (Good)</span><br><span id="car-ls2">—</span>
+                    </div>
+                    <div class="col-sm-4"><span class="text-muted">LS3 (Bad
+                            bottom)</span><br><span id="car-ls3">—</span></div>
+                </div>
+
+                <h6 class="text-muted mt-4 mb-2">Bin Load Cells (HX711)</h6>
+                <div class="row g-3">
+                    <div class="col-sm-4">
+                        <span class="text-muted">Bin Great</span><br>
+                        <span id="car-hx-great" class="badge bg-secondary">—</span>
+                        <div><strong id="car-bin-great">—</strong> kg</div>
+                    </div>
+                    <div class="col-sm-4">
+                        <span class="text-muted">Bin Good</span><br>
+                        <span id="car-hx-good" class="badge bg-secondary">—</span>
+                        <div><strong id="car-bin-good">—</strong> kg</div>
+                    </div>
+                    <div class="col-sm-4">
+                        <span class="text-muted">Bin Bad</span><br>
+                        <span id="car-hx-bad" class="badge bg-secondary">—</span>
+                        <div><strong id="car-bin-bad">—</strong> kg</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        <section class="card mb-3 d-none" id="carriage-cal-zone">
+            <div class="card-header">Calibration</div>
+            <div class="card-body"><em>Available in Phase 3.</em></div>
+        </section>
+        <section class="card mb-3 d-none" id="carriage-test-zone">
+            <div class="card-header">Manual Tests</div>
+            <div class="card-body"><em>Available in Phase 3.</em></div>
+        </section>
+    </div>
+
+    <!-- 4. DRYING CHAMBER TAB -->
+    <div class="tab-pane fade" id="tab-chamber">
+        <section class="card mb-3">
+            <div class="card-header fw-bold">Status</div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <span class="text-muted">DS18B20 (Chamber Temp)</span><br>
+                        <span id="ch-ds-state" class="badge bg-secondary">—</span>
+                        <div class="mt-1"><strong id="ch-temp">—</strong> °C</div>
+                    </div>
+                    <div class="col-md-6">
+                        <span class="text-muted">DHT22 (Exhaust Temp / RH)</span><br>
+                        <span id="ch-dht-state" class="badge bg-secondary">—</span>
+                        <div class="mt-1"><strong id="ch-exhaust">—</strong></div>
+                    </div>
+                </div>
+                <div class="row g-3 mt-2">
+                    <div class="col-md-6">
+                        <span class="text-muted">Heater SSR</span><br>
+                        <span class="badge bg-secondary">Unverified (output only)</span>
+                        <div class="mt-1">State: <strong id="ch-heater">—</strong></div>
+                        <small class="text-muted" id="ch-heater-last">Last: —</small>
+                    </div>
+                    <div class="col-md-6">
+                        <span class="text-muted">Fan Relay</span><br>
+                        <span class="badge bg-secondary">Unverified (output only)</span>
+                        <div class="mt-1">State: <strong id="ch-fans">—</strong></div>
+                        <small class="text-muted" id="ch-fans-last">Last: —</small>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- 5. CAMERA TAB -->
+    <div class="tab-pane fade" id="tab-camera">
+        <section class="card mb-3">
+            <div class="card-header fw-bold">Status</div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <span class="text-muted">Webcam</span><br>
+                        <span id="cam-state" class="badge bg-secondary">—</span>
+                    </div>
+                    <div class="col-md-6">
+                        <span class="text-muted">Last Capture</span><br>
+                        <span id="cam-last">—</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+        <section class="card mb-3 d-none" id="camera-cal-zone">
+            <div class="card-header">Calibration</div>
+            <div class="card-body"><em>Available in Phase 5.</em></div>
+        </section>
+    </div>
+
+</div><!-- tab-content -->
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/components.js') }}"></script>
+{% endblock %}

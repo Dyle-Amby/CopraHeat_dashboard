@@ -734,17 +734,75 @@ def main(argv: list[str] | None = None) -> None:
                 # the heartbeat is wall-clock, so it is throttled on real time
                 if state_changed or real - last_live >= args.live_interval:
                     components_snapshot = health.snapshot()
+                    iso_now = datetime.now().isoformat()
+
+                    # 1. Limit switch states (LS1 = Great top, LS2 = Good, LS3 = Bad bottom)
+                    switches = {"LS1": False, "LS2": False, "LS3": False}
+                    if hasattr(carriage_driver, "_limits") and carriage_driver._limits is not None:
+                        try:
+                            switches = carriage_driver._limits.read()
+                        except Exception:
+                            pass
+                    elif carriage_driver and carriage_driver.current_bin in ("great", "good", "bad"):
+                        # Simulation fallback: mark current bin stop as pressed
+                        stop_map = {"great": "LS1", "good": "LS2", "bad": "LS3"}
+                        switches[stop_map[carriage_driver.current_bin]] = True
+
+                    # 2. Bin scale weights & status
+                    bin_weights = {"great": None, "good": None, "bad": None}
+                    bin_statuses = {"great": "unknown", "good": "unknown", "bad": "unknown"}
+                    if io is not None:
+                        for b_name in ("great", "good", "bad"):
+                            val = io.read_bin_kg(b_name)
+                            bin_weights[b_name] = val
+                            bin_statuses[b_name] = "ok" if val is not None else "fault"
+                    elif args.simulate:
+                        for b_name in ("great", "good", "bad"):
+                            bin_weights[b_name] = 0.0
+                            bin_statuses[b_name] = "ok"
+
+                    # 3. Last trigger label
+                    trigger_labels = {
+                        "great": "LS1 (Great top)",
+                        "good": "LS2 (Good)",
+                        "bad": "LS3 (Bad bottom)",
+                    }
+                    last_trigger = trigger_labels.get(carriage_driver.current_bin, "—") if carriage_driver else "—"
+
+                    # 4. Conveyor & Carriage components
                     components_snapshot["conveyor"] = {
                         **components_snapshot.get("conveyor", {}),
                         "busy": conveyor.busy,
                         "position_steps": conveyor.position_steps,
                         "last_result": conveyor.last_result,
+                        "last_cmd": commands.conveyor.value if hasattr(commands.conveyor, "value") else str(commands.conveyor),
+                        "last_cmd_at": iso_now,
                     }
                     components_snapshot["carriage"] = {
                         **components_snapshot.get("carriage", {}),
-                        "state": carriage_driver.state,
-                        "current_bin": carriage_driver.current_bin,
-                        "last_fault": carriage_driver.last_fault,
+                        "state": carriage_driver.state if carriage_driver else "idle",
+                        "current_bin": carriage_driver.current_bin if carriage_driver else None,
+                        "last_trigger": last_trigger,
+                        "last_fault": carriage_driver.last_fault if carriage_driver else None,
+                        "last_cmd": f"GOTO {commands.carriage_target.upper()}" if commands.carriage_target else "HOLD",
+                        "last_cmd_at": iso_now,
+                    }
+
+                    # 5. Output-only devices (Servo, Heater, Fans) & sensor states
+                    components_snapshot["switches"] = switches
+                    components_snapshot["bin_kg"] = bin_weights
+                    components_snapshot["bin_scales_status"] = bin_statuses
+                    components_snapshot["servo"] = {
+                        "last_cmd": "OPEN" if commands.gate_open else "CLOSED",
+                        "last_cmd_at": iso_now,
+                    }
+                    components_snapshot["heater"] = {
+                        "last_cmd": "ON" if commands.heater_on else "OFF",
+                        "last_cmd_at": iso_now,
+                    }
+                    components_snapshot["fans"] = {
+                        "last_cmd": f"ON ({commands.fan_reason})" if commands.fans_on else "OFF",
+                        "last_cmd_at": iso_now,
                     }
                     active_prompt_for_db = None
                     if sorting_flow is not None and sorting_flow.active_prompt:

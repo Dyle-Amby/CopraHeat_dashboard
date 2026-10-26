@@ -28,7 +28,7 @@ class AppCase(unittest.TestCase):
 
 class TestPages(AppCase):
     def test_every_page_renders_on_an_empty_database(self):
-        for url in ("/", "/sensor-logs", "/batch-history", "/control-panel"):
+        for url in ("/", "/sensor-logs", "/batch-history", "/control-panel", "/components"):
             with self.subTest(url=url):
                 self.assertEqual(self.client.get(url).status_code, 200)
 
@@ -52,6 +52,16 @@ class TestPages(AppCase):
         )
         for stale in ("Ambient", "Diverter flap", "trapdoor", "Emergency stop"):
             self.assertNotIn(stale, pages)
+
+    def test_components_page_renders(self):
+        resp = self.client.get("/components")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(b"Components &amp; Calibration", resp.data)
+        self.assertIn(b"tab-hopper", resp.data)
+        self.assertIn(b"tab-conveyor", resp.data)
+        self.assertIn(b"tab-carriage", resp.data)
+        self.assertIn(b"tab-chamber", resp.data)
+        self.assertIn(b"tab-camera", resp.data)
 
 
 class TestLive(AppCase):
@@ -179,6 +189,7 @@ class TestFormatting(unittest.TestCase):
         self.assertEqual(fmt_duration(None), "—")
         self.assertEqual(fmt_duration(59 * 60), "59m")
         self.assertEqual(fmt_duration(5 * 3600 + 42 * 60 + 10), "5h 42m")
+
 
 
 if __name__ == "__main__":
