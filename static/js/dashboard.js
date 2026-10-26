@@ -69,7 +69,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     if (live.supervisor === 'never_run') {
       $('phaseValue').textContent = '—';
-      $('phaseNote').textContent = 'Start the supervisor: python -m hardware.run_cords';
+      $('phaseNote').textContent = 'Supervisor stopped — start it from the Control Panel';
       return;
     }
 

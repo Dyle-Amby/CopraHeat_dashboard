@@ -609,7 +609,7 @@ class TestDryingTimerAndPrompts(unittest.TestCase):
         self.assertTrue(answered)
         self.assertIsNone(c.active_prompt)
         self.assertNotIn("drying_timer_expired", c.alarms)
-        self.assertEqual(c.drying_timer_deadline, 3600.0 + 1800.0)
+        self.assertEqual(c.drying_timer_deadline, 3601.0 + 1800.0)  # Item 1: max(deadline, now) = 3601.0
 
         c.update(Inputs(now=5401.0, chamber_temp=50.0, exhaust_temp=45.0, exhaust_rh=60.0))
         c.answer_prompt("extend_6000", now=5401.0)

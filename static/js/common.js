@@ -20,10 +20,16 @@ window.CORDS = (function () {
     intake_stall: 'Hopper never reached the target weight',
     conveyor_stall: 'Conveyor did not acknowledge a move',
     drying_timeout: 'Drying hit its time ceiling without reaching the endpoint',
+    drying_timer_expired: 'Drying timer expired — awaiting operator extension or completion',
     sorting_timeout: 'Sorting ran past its time limit',
     sorting_needs_review: 'Vision grading flagged for review — manual bin assignment required',
     carriage_move_timeout: 'Carriage failed to reach bin stop within timeout',
+    carriage_fault: 'Carriage positioner reported a fault or limit switch error',
     discharge_timeout: 'Batch discharge timed out before scale stabilized',
+    bin_scale_fault: 'Bin load cell not responding — weight verification unavailable',
+    hopper_scale_fault: 'Hopper load cell not responding',
+    conveyor_ack_timeout: 'Conveyor move did not acknowledge in time',
+    camera_timeout: 'Camera capture timed out — check webcam connection',
     aborted: 'Batch aborted'
   };
 

@@ -65,6 +65,18 @@ def validate_command(name, payload):
 
     # Handle dictionary / JSON-object payload
     if isinstance(payload, dict):
+        # Strip sensitive pin from payload before storing/queuing
+        payload = {k: v for k, v in payload.items() if k != "pin"}
+        if name == "acquire_calibration_lock":
+            dur = payload.get("duration_s", 300.0)
+            try:
+                dur_f = float(dur)
+            except (TypeError, ValueError):
+                raise ValueError("duration_s must be a number") from None
+            if not math.isfinite(dur_f):
+                raise ValueError("duration_s must be a finite number")
+            payload["duration_s"] = max(10.0, min(1800.0, dur_f))
+            return name, json.dumps(payload)
         if name == "set_target_kg":
             val = payload.get("target_kg")
             if val is None:
@@ -84,6 +96,17 @@ def validate_command(name, payload):
         if name == "abort":
             reason = (payload.get("reason") or "").strip() or "operator abort"
             return name, reason[:ABORT_REASON_MAX]
+        if name == "set_drying_timer":
+            dur = payload.get("duration_s") or float(payload.get("duration_min", 60)) * 60
+            try:
+                dur = float(dur)
+            except (TypeError, ValueError):
+                raise ValueError("set_drying_timer needs duration_s or duration_min") from None
+            if dur <= 0:
+                raise ValueError("drying timer duration must be greater than zero")
+            return name, json.dumps({"duration_s": dur})
+        if name in ("answer_prompt", "clear_prompt"):
+            return name, json.dumps(payload)
         return name, json.dumps(payload)
 
     # String / scalar payload
@@ -104,6 +127,20 @@ def validate_command(name, payload):
     if name == "abort":
         reason = (payload or "").strip() or "operator abort"
         return name, reason[:ABORT_REASON_MAX]
+    if name == "set_drying_timer":
+        if payload is None:
+            raise ValueError("set_drying_timer needs duration_s or duration_min")
+        try:
+            dur = float(payload)
+        except (TypeError, ValueError):
+            raise ValueError("set_drying_timer needs duration_s or duration_min") from None
+        if dur <= 0:
+            raise ValueError("drying timer duration must be greater than zero")
+        return name, json.dumps({"duration_s": dur})
+    if name in ("answer_prompt", "clear_prompt"):
+        if payload is None:
+            return name, None
+        return name, str(payload) if not isinstance(payload, str) else payload
     if payload is not None:
         return name, str(payload)
     return name, None
@@ -279,7 +316,11 @@ def create_app(db_path=None) -> Flask:
             comp = None
             sess = None
             if isinstance(raw_payload, dict):
-                dur = float(raw_payload.get("duration_s", 300.0))
+                try:
+                    dur = float(raw_payload.get("duration_s", 300.0))
+                except (TypeError, ValueError):
+                    return json_error(400, "duration_s must be a number")
+                dur = max(10.0, min(1800.0, dur))
                 comp = raw_payload.get("component")
                 sess = raw_payload.get("session_id")
             granted = db.acquire_calibration_lock(conn, duration_s=dur, component=comp, session_id=sess)

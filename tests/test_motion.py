@@ -105,8 +105,9 @@ class TestStepperConveyor(unittest.TestCase):
         stepper_mock.start.assert_called_once_with(1500, 500.0, forward=True)
         self.assertTrue(conv.busy)
 
-        # Stepper finishes
+        # Stepper finishes (Item 12: simulate 0.15s elapsed so grace period passes)
         stepper_mock.busy = False
+        conv._moved_at = 0.0
         self.assertFalse(conv.busy)
         self.assertEqual(conv.last_result, "done")
         self.assertEqual(conv.position_steps, 1500)

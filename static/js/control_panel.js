@@ -33,6 +33,11 @@ document.addEventListener('DOMContentLoaded', function () {
       }
       btn.disabled = disabled;
     });
+    // Drying timer button: only active during drying
+    const timerBtn = $('dryingTimerBtn');
+    if (timerBtn) {
+      timerBtn.disabled = busy || !running || !(live && live.state === 'drying');
+    }
   }
 
   function feedback(message, kind) {
@@ -44,7 +49,7 @@ document.addEventListener('DOMContentLoaded', function () {
   async function run(name, payload) {
     busy = true;
     refreshButtons();
-    feedback('Sending…', 'pending');
+    feedback('Sending\u2026', 'pending');
     const result = await C.sendCommand(name, payload);
     feedback(result.message, result.ok ? 'ok' : 'refused');
     busy = false;
@@ -52,6 +57,43 @@ document.addEventListener('DOMContentLoaded', function () {
     return result;
   }
 
+  // ── Active Prompt ──────────────────────────────────────────────────────────
+  let currentPromptId = null;
+
+  function showPrompt(prompt) {
+    const card = $('activePromptCard');
+    const msgEl = $('promptMessage');
+    const optEl = $('promptOptions');
+    if (!card || !msgEl || !optEl) return;
+
+    if (currentPromptId === prompt.id) return;  // already shown
+    currentPromptId = prompt.id;
+
+    msgEl.textContent = prompt.message || 'Machine awaiting operator decision';
+    optEl.innerHTML = '';
+
+    (prompt.options || []).forEach(opt => {
+      const btn = document.createElement('button');
+      btn.className = opt === 'abort' ? 'btn-danger-muted' : 'btn-outline-ink';
+      btn.style.cssText = 'font-size:0.85rem; padding:4px 12px;';
+      btn.textContent = opt.replace(/_/g, ' ');
+      btn.addEventListener('click', async () => {
+        if (opt === 'abort' && !window.confirm('Abort the sorting operation?')) return;
+        await run('answer_prompt', JSON.stringify({ id: prompt.id, action: opt }));
+      });
+      optEl.appendChild(btn);
+    });
+
+    card.classList.remove('d-none');
+  }
+
+  function hidePrompt() {
+    const card = $('activePromptCard');
+    if (card) card.classList.add('d-none');
+    currentPromptId = null;
+  }
+
+  // ── Live state handler ─────────────────────────────────────────────────────
   C.onLive(function (state) {
     live = state;
     $('stateBadge').textContent = state.supervisor === 'running'
@@ -69,6 +111,13 @@ document.addEventListener('DOMContentLoaded', function () {
       }
     }
 
+    // Active prompt
+    if (state.active_prompt) {
+      showPrompt(state.active_prompt);
+    } else {
+      hidePrompt();
+    }
+
     // don't overwrite what the operator is typing
     const input = $('targetInput');
     if (document.activeElement !== input && state.target_kg != null) {
@@ -77,6 +126,7 @@ document.addEventListener('DOMContentLoaded', function () {
     refreshButtons();
   });
 
+  // ── Generic command buttons ───────────────────────────────────────────────
   document.querySelectorAll('.cp-btn[data-command]').forEach(btn => {
     if (btn.dataset.command === 'set_target_kg') return;   // handled by the form
     btn.addEventListener('click', async () => {
@@ -95,6 +145,21 @@ document.addEventListener('DOMContentLoaded', function () {
     await run('set_target_kg', $('targetInput').value);
     $('targetInput').blur();
   });
+
+  // ── Drying timer form ──────────────────────────────────────────────────────
+  const dryingTimerForm = $('dryingTimerForm');
+  if (dryingTimerForm) {
+    dryingTimerForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      const minutes = parseFloat($('dryingTimerInput').value);
+      if (!isFinite(minutes) || minutes <= 0) {
+        feedback('Enter a positive number of minutes for the drying timer.', 'refused');
+        return;
+      }
+      await run('set_drying_timer', JSON.stringify({ duration_min: minutes }));
+      $('dryingTimerInput').blur();
+    });
+  }
 
   // --- Supervisor Service Card Controls -------------------------------------
   const supervisorBadge = $('supervisorBadge');
@@ -136,7 +201,7 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   async function handleSupervisorAction(action) {
-    supervisorFeedback('Sending ' + action + '…', 'pending');
+    supervisorFeedback('Sending ' + action + '\u2026', 'pending');
     let payload = {};
 
     const activeBatch = live && ['intake', 'drying', 'cooldown', 'sorting'].includes(live.state);
@@ -154,11 +219,33 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     try {
-      const res = await fetch(`/api/supervisor/${action}`, {
+      const headers = { 'Content-Type': 'application/json' };
+      const savedPin = sessionStorage.getItem('cords_pin');
+      if (savedPin) headers['X-CORDS-PIN'] = savedPin;
+
+      let res = await fetch(`/api/supervisor/${action}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: headers,
         body: JSON.stringify(payload)
       });
+
+      // If PIN is required and missing or invalid, prompt the operator and retry
+      if (res.status === 403) {
+        const pin = window.prompt('Supervisor action requires security PIN:');
+        if (pin) {
+          sessionStorage.setItem('cords_pin', pin);
+          headers['X-CORDS-PIN'] = pin;
+          res = await fetch(`/api/supervisor/${action}`, {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify(payload)
+          });
+        } else {
+          supervisorFeedback('Action cancelled: PIN required.', 'refused');
+          return;
+        }
+      }
+
       const data = await res.json();
       if (res.ok) {
         supervisorFeedback(data.message || action + ' succeeded', 'ok');

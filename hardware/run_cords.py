@@ -15,6 +15,7 @@ two bench loops (run_climate, run_hopper), which stay for single-subsystem work.
 """
 
 import argparse
+import json
 import os
 import signal
 import sys
@@ -23,10 +24,13 @@ from datetime import datetime
 
 from hardware import db, pins, sensors
 from hardware.batch import BatchController, Commands, Inputs, apply_command
+from hardware.health import ComponentHealthRegistry
 from hardware.motion import CarriageDriver, SimulatedCarriage, SimulatedConveyor, StepperConveyor
+from hardware.sorting import SortingFlow
 from hardware.drying import absolute_humidity
-from hardware.states import BatchState
+from hardware.states import BatchState, ConveyorCommand
 
+_LIVE = (BatchState.INTAKE, BatchState.DRYING, BatchState.COOLDOWN, BatchState.SORTING)
 _FINISHED = (BatchState.COMPLETE, BatchState.ABORTED)
 
 # the shortest timer the state machine runs on; a simulated tick coarser than
@@ -79,10 +83,27 @@ class Actuators:
         self.servo = Servo(channel=args.pwm_channel, chip=args.pwm_chip)
         self.servo.set_angle(self.closed_angle)
         self.hx = HX711(pins.HX711_HOPPER.dout, pins.HX711_HOPPER.sck, scale=args.scale)
+        self.hx_bins = {
+            "great": HX711(pins.HX711_BIN_GREAT.dout, pins.HX711_BIN_GREAT.sck, scale=args.scale),
+            "good":  HX711(pins.HX711_BIN_GOOD.dout,  pins.HX711_BIN_GOOD.sck,  scale=args.scale),
+            "bad":   HX711(pins.HX711_BIN_BAD.dout,   pins.HX711_BIN_BAD.sck,   scale=args.scale),
+        }
 
     def read_hopper_kg(self) -> float | None:
         # the cell is mounted on the gate, so its zero shifts with gate angle
         return self.hx.read_kg(self.offset_open if self._gate_open else self.offset_closed)
+
+    def read_bin_kg(self, target_bin: str | None = None) -> float | None:
+        """Read a bin scale by bin name ('great', 'good', 'bad')."""
+        if target_bin is None:
+            return None
+        hx = self.hx_bins.get(target_bin)
+        if hx is None:
+            return None
+        try:
+            return hx.read_kg()
+        except Exception:
+            return None
 
     def apply(self, c: Commands) -> None:
         self.heater.value = c.heater_on
@@ -99,6 +120,8 @@ class Actuators:
         self.heater.close()
         self.fans.close()
         self.hx.close()
+        for hx in self.hx_bins.values():
+            hx.close()
 
 
 def fmt(value: float | None, unit: str = "C") -> str:
@@ -149,7 +172,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     gcal.add_argument("--min-confidence", type=float, default=None, help="min top confidence")
     gcal.add_argument("--blur-threshold", type=float, default=None, help="min Laplacian blur variance")
     gcal.add_argument("--max-rejected-ratio", type=float, default=None, help="max rejected ratio before review")
+    gcal.add_argument("--chamber-to-camera-steps", type=int, default=None, help="steps from chamber mid to camera point")
     gcal.add_argument("--camera-to-discharge-steps", type=int, default=None, help="steps from camera to roller edge")
+    gcal.add_argument("--conveyor-p00", type=int, default=None, help="conveyor driver pulses per revolution (P00)")
+    gcal.add_argument("--conveyor-hz", type=float, default=None, help="conveyor step frequency (Hz)")
     gcal.add_argument("--discharge-total-steps", type=int, default=None, help="steps to completely discharge batch")
     gcal.add_argument("--safety-margin-steps", type=int, default=None, help="buffer before discharge edge")
     gcal.add_argument("--discharge-timeout-s", type=float, default=None, help="discharge timeout in seconds")
@@ -213,6 +239,9 @@ SETTING_FLAGS = {
     "carriage_move_timeout_s": ("carriage_move_timeout_s", float),
     "hopper_to_chamber_steps": ("hopper_to_chamber_steps", int),
     "intake_advance_timeout_s": ("intake_advance_timeout_s", float),
+    "chamber_to_camera_steps": ("chamber_to_camera_steps", int),
+    "conveyor_p00": ("conveyor_p00", int),
+    "conveyor_hz": ("conveyor_hz", float),
     # Fan airflow
     "fan_warmup_s": ("fan_warmup_s", float),
     "fan_pulse_on_s": ("fan_pulse_on_s", float),
@@ -282,10 +311,24 @@ def main(argv: list[str] | None = None) -> None:
     if args.fan_rh_off is not None:
         fan_kwargs["rh_off"] = args.fan_rh_off
 
+    # Item 16: Intake advance timing calculation
+    intake_hz = args.conveyor_hz or args.sample_hz or 400.0
+    intake_steps = args.hopper_to_chamber_steps or 0
+    expected_intake_s = (intake_steps / intake_hz) if (intake_steps > 0 and intake_hz > 0) else 0.0
+
+    intake_timeout = args.intake_advance_timeout_s
+    if intake_timeout is None:
+        intake_timeout = max(30.0, expected_intake_s * 1.5 + 5.0)
+    elif expected_intake_s >= intake_timeout:
+        print(f"WARNING: expected intake time ({expected_intake_s:.1f}s) >= timeout ({intake_timeout:.1f}s); adjusting timeout to {expected_intake_s + 10.0:.1f}s")
+        intake_timeout = expected_intake_s + 10.0
+
+    if intake_steps > 0:
+        print(f"cords intake advance: {intake_steps} steps @ {intake_hz:.0f} Hz -> expected {expected_intake_s:.1f}s (timeout {intake_timeout:.1f}s)")
+
     controller = BatchController(
         target_kg=args.target_kg,
-        intake_advance_timeout_s=args.intake_advance_timeout_s
-            if args.intake_advance_timeout_s is not None else 30.0,
+        intake_advance_timeout_s=intake_timeout,
         fans=FanController(**fan_kwargs),
     )
     if args.simulate or args.dry_run:
@@ -367,14 +410,11 @@ def main(argv: list[str] | None = None) -> None:
         classifier = CopraClassifier()
         webcam = USBWebcam()
 
-    sampler: grading.SortingSampler | None = None
+    sorting_flow: SortingFlow | None = None
     sorting_config_snapshot: str | None = None
-    discharge_started_at: float | None = None
-    discharge_steps_sent: int = 0
-    discharge_complete: bool = False
-    carriage_target_reached: bool = False
-    carriage_move_started_at: float | None = None
-    sorting_alarms: set[str] = set()
+    prev_capture_requested: bool = False
+
+    health = ComponentHealthRegistry()
 
     pid = os.getpid()
     commands: Commands | None = None
@@ -400,6 +440,33 @@ def main(argv: list[str] | None = None) -> None:
                             raise RuntimeError("cannot start batch: calibration in progress")
                         if row["name"] in ("acquire_calibration_lock", "release_calibration_lock"):
                             message = f"{row['name']} acknowledged"
+                        elif row["name"] == "answer_prompt":
+                            payload_dict = json.loads(row["payload"]) if row["payload"] else {}
+                            action = payload_dict.get("action") or payload_dict.get("option", "")
+                            prompt_id = payload_dict.get("id")
+                            if action == "retry" and getattr(carriage_driver, "state", None) == "fault":
+                                carriage_driver.clear_fault()
+                            if sorting_flow is not None and sorting_flow.active_prompt and (
+                                prompt_id is None or sorting_flow.active_prompt.id == prompt_id
+                            ):
+                                ok = sorting_flow.answer_prompt(action, now=now)
+                                controller.active_prompt = None
+                                message = f"prompt answered: {action}" if ok else "invalid prompt action"
+                                if "aborted" in sorting_flow.alarms:
+                                    controller.abort(f"sorting aborted ({action})")
+                            else:
+                                message = apply_command(controller, row["name"], row["payload"])
+                        elif row["name"] == "set_drying_timer":
+                            payload_dict = json.loads(row["payload"]) if row["payload"] else {}
+                            dur_s = float(
+                                payload_dict.get("duration_s")
+                                or float(payload_dict.get("duration_min", 60)) * 60
+                            )
+                            message = apply_command(controller, row["name"], row["payload"])
+                            if conn is not None and batch_id is not None:
+                                db.set_batch_drying_timer(
+                                    conn, batch_id, dur_s, controller.drying_timer_deadline
+                                )
                         else:
                             message = apply_command(controller, row["name"], row["payload"])
                         db.resolve_command(conn, row["id"], db.DONE, message)
@@ -422,6 +489,37 @@ def main(argv: list[str] | None = None) -> None:
                 chamber, exhaust_t, exhaust_rh = cache.chamber_temp, cache.exhaust_temp, cache.exhaust_rh
                 hopper_kg = io.read_hopper_kg() if io is not None else None
                 sorted_kg = None
+            # ── component health recording ─────────────────────────────────
+            if chamber is not None:
+                health.record_ok("chamber_sensor", now)
+            elif not args.simulate:
+                health.record_fault("chamber_sensor", "no reading", now)
+            if exhaust_t is not None and exhaust_rh is not None:
+                health.record_ok("exhaust_sensor", now)
+            elif not args.simulate:
+                health.record_warn("exhaust_sensor", "no reading", now)
+            if hopper_kg is not None:
+                health.record_ok("hopper_scale", now)
+            elif not args.simulate:
+                health.record_fault("hopper_scale", "no reading", now)
+            if conveyor.busy:
+                health.record_ok("conveyor", now)
+            health_alarms = health.evaluate_timeouts(
+                now, batch_active=(controller.state in _LIVE)
+            )
+            if health_alarms:
+                combined_alarms = frozenset(commands.alarms | health_alarms) if hasattr(commands, 'alarms') else frozenset(health_alarms)
+                commands = Commands(
+                    state=commands.state,
+                    heater_on=commands.heater_on,
+                    fans_on=commands.fans_on,
+                    gate_open=commands.gate_open,
+                    conveyor=commands.conveyor,
+                    alarms=combined_alarms,
+                    fan_reason=commands.fan_reason,
+                    sorting_stage=commands.sorting_stage,
+                    carriage_target=commands.carriage_target,
+                )
 
             # --- SORTING orchestration ---------------------------------------
             grade_ready = False
@@ -432,81 +530,138 @@ def main(argv: list[str] | None = None) -> None:
             sample_total_n = 0
 
             if controller.state is BatchState.SORTING:
-                if sampler is None:
-                    sampler = grading.SortingSampler(config=grading_cfg)
-                    # Snapshot config at SORTING start
-                    sorting_config_snapshot = sampler.snapshot_config()
-                    discharge_started_at = None
-                    discharge_steps_sent = 0
-                    discharge_complete = False
-                    carriage_target_reached = False
-                    carriage_move_started_at = None
-                    sorting_alarms.clear()
+                # ── initialise SortingFlow on first SORTING tick ──────────────
+                if sorting_flow is None:
+                    grading_cfg_merged = {**grading.DEFAULT_GRADING_CONFIG, **{
+                        k: v for k, v in grading_cfg.items() if v is not None
+                    }}
+                    sorting_flow = SortingFlow(
+                        config=grading_cfg_merged,
+                        chamber_to_camera_steps=(
+                            grading_cfg_merged.get("camera_to_discharge_steps") or 0
+                        ),
+                        discharge_total_steps=int(
+                            grading_cfg_merged.get("discharge_total_steps") or 3000
+                        ),
+                        sample_hz=float(
+                            grading_cfg_merged.get("sample_hz") or 400.0
+                        ),
+                        settle_s=float(
+                            grading_cfg_merged.get("settle_s") or 0.3
+                        ),
+                        carriage_move_timeout_s=float(
+                            grading_cfg_merged.get("carriage_move_timeout_s") or 30.0
+                        ),
+                        discharge_timeout_s=float(
+                            grading_cfg_merged.get("discharge_timeout_s") or 60.0
+                        ),
+                    )
+                    sorting_flow.start(now=now)
+                    sorting_config_snapshot = sorting_flow.sampler.snapshot_config()
+                    prev_capture_requested = False
 
-                # Phase 1: Sampling
-                if not sampler.grade_ready:
-                    conveyor.update(now)
-                    if not conveyor.busy:
-                        if args.simulate:
-                            # Simulated frame capture
-                            fake_vec = [0.05, 0.20, 0.75]
-                            sampler.record_capture(fake_vec)
-                        elif webcam is not None and classifier is not None:
-                            time.sleep(sampler.settle_s)
-                            vec = webcam.capture_softmax(classifier, sampler.blur_threshold, sampler.min_confidence)
-                            sampler.record_capture(vec)
-                        else:
-                            # Dry run / mock mode fallback
-                            sampler.record_capture([0.05, 0.15, 0.80])
+                # ── read target-bin scale ─────────────────────────────────────
+                target_bin_for_reading = (
+                    sorting_flow.carriage_target
+                    or controller.operator_grade
+                    or sorting_flow.batch_grade
+                )
+                bin_kg: float | None = None
+                if io is not None and target_bin_for_reading:
+                    bin_kg = io.read_bin_kg(target_bin_for_reading)
+                    if bin_kg is not None:
+                        health.record_ok("bin_scale", now)
+                    else:
+                        health.record_warn("bin_scale", "no reading", now)
+                elif args.simulate and sorting_flow.stage.value in ("verify", "discharge"):
+                    # Simulated weight rise during verify
+                    bin_kg = (sorting_flow.baseline_bin_kg or 0.0) + (
+                        0.5 if sorting_flow.stage.value == "verify" else 0.0
+                    )
 
-                        if not sampler.grade_ready and sampler.can_jog_forward():
-                            # Advance belt
-                            steps = sampler.step_forward()
-                            if steps > 0:
-                                conveyor.move(steps, hz=grading_cfg.get("sample_hz", 400.0), forward=True, now=now)
+                # ── camera capture ────────────────────────────────────────────
+                frame_vector = None
+                capture_done = False
+                if sorting_flow.capture_requested and not prev_capture_requested:
+                    if args.simulate:
+                        frame_vector = [0.05, 0.20, 0.75]   # simulated "great"
+                        capture_done = True
+                    elif webcam is not None and classifier is not None:
+                        frame_vector = webcam.capture_softmax(
+                            classifier,
+                            sorting_flow.sampler.blur_threshold,
+                            sorting_flow.sampler.min_confidence,
+                        )
+                        capture_done = True  # Item 4: Even if None (rejected/blur), capture completed
+                    else:
+                        frame_vector = [0.05, 0.15, 0.80]   # dry-run mock
+                        capture_done = True
+                prev_capture_requested = sorting_flow.capture_requested
 
-                grade_ready = sampler.grade_ready
-                batch_grade = sampler.batch_grade
-                needs_review = sampler.needs_review
-                sample_vectors = sampler.valid_vectors
-                sample_valid_n = sampler.sample_valid_n
-                sample_total_n = sampler.total_attempts
-
-                # Update carriage non-blocking driver
+                # ── drive carriage & conveyor, then tick SortingFlow ──────────
                 carriage_driver.update(now)
+                conveyor.update(now)
 
-                # Phase 2: Carriage positioning & discharge
-                target_bin = controller.operator_grade or batch_grade
-                if target_bin and not carriage_target_reached:
-                    if carriage_move_started_at is None:
-                        carriage_move_started_at = now
-                        carriage_driver.goto(target_bin, now=now)
+                if sorting_flow.conveyor_move_steps > 0:
+                    conveyor.move(
+                        sorting_flow.conveyor_move_steps,
+                        hz=sorting_flow.conveyor_move_hz,
+                        forward=True,
+                        now=now,
+                    )
 
-                    if carriage_driver.state == "at_target" and carriage_driver.current_bin == target_bin:
-                        carriage_target_reached = True
-                    elif carriage_driver.state == "fault":
-                        sorting_alarms.add("carriage_fault")
-                    elif now - carriage_move_started_at >= args.carriage_move_timeout_s:
-                        sorting_alarms.add("carriage_move_timeout")
+                if sorting_flow.carriage_target and (
+                    carriage_driver.current_bin != sorting_flow.carriage_target
+                    or carriage_driver.state not in ("at_target", "moving")
+                ):
+                    carriage_driver.goto(sorting_flow.carriage_target, now=now)
 
-                if carriage_target_reached and target_bin:
-                    if discharge_started_at is None:
-                        discharge_started_at = now
-                    elapsed_discharge = now - discharge_started_at
+                # Item 14: copra_present flag (empty belt reference check is Phase 5)
+                copra_present = True
 
-                    # Check discharge timeout
-                    if elapsed_discharge >= args.discharge_timeout_s and not discharge_complete:
-                        sorting_alarms.add("discharge_timeout")
+                sorting_flow.update(
+                    now=now,
+                    conveyor_busy=conveyor.busy,
+                    conveyor_last_result=getattr(conveyor, "last_result", "done"),
+                    carriage_state=carriage_driver.state,
+                    carriage_current_bin=carriage_driver.current_bin,
+                    bin_kg=bin_kg,
+                    operator_grade=controller.operator_grade,
+                    copra_present=copra_present,
+                    frame_vector=frame_vector,
+                    capture_done=capture_done,
+                )
 
-                    # Automatic completion once steps satisfied
-                    if elapsed_discharge >= (args.discharge_total_steps / args.sample_hz):
-                        discharge_complete = True
+                if "aborted" in sorting_flow.alarms and controller.state in _LIVE:
+                    controller.abort("sorting flow aborted")
+
+                # ── bubble SortingFlow prompt up to BatchController ───────────
+                if sorting_flow.active_prompt and controller.active_prompt is None:
+                    controller.active_prompt = sorting_flow.active_prompt
+
+                # ── extract outputs ───────────────────────────────────────────
+                grade_ready = sorting_flow.grade_ready
+                batch_grade = sorting_flow.batch_grade
+                needs_review = sorting_flow.needs_review
+                sorting_complete = sorting_flow.is_complete
+                sorted_kg = sorting_flow.weight_out_kg
+                sample_vectors = sorting_flow.sampler.valid_vectors
+                sample_valid_n = sorting_flow.sampler.sample_valid_n
+                sample_total_n = sorting_flow.sampler.total_attempts
+
             else:
-                if sampler is not None:
-                    sampler = None
+                if sorting_flow is not None:
+                    sorting_flow = None
+                    prev_capture_requested = False
                     carriage_driver.stop()
-
-            sorting_complete = discharge_complete
+                grade_ready = False
+                batch_grade = None
+                needs_review = False
+                sorting_complete = False
+                sorted_kg = None
+                sample_vectors = None
+                sample_valid_n = 0
+                sample_total_n = 0
 
             inputs = Inputs(
                 now=now,
@@ -526,33 +681,12 @@ def main(argv: list[str] | None = None) -> None:
                 sorting_config_snapshot=sorting_config_snapshot,
             )
             commands = controller.update(inputs)
-            # Add dynamic sorting alarms
-            if sorting_alarms:
-                active_alarms = set(commands.alarms) | sorting_alarms
-                commands = Commands(
-                    state=commands.state,
-                    heater_on=commands.heater_on,
-                    fans_on=commands.fans_on,
-                    gate_open=commands.gate_open,
-                    conveyor=commands.conveyor,
-                    alarms=frozenset(active_alarms),
-                    fan_reason=commands.fan_reason,
-                    sorting_stage=commands.sorting_stage,
-                    carriage_target=commands.carriage_target,
-                )
 
             if io is not None:
                 io.apply(commands)
 
-            if commands.state is BatchState.SORTING:
-                if commands.sorting_stage == "discharge" and carriage_target_reached:
-                    conveyor.apply(commands.conveyor, now)
-                elif commands.sorting_stage == "discharge" and not carriage_target_reached:
-                    conveyor.apply(ConveyorCommand.STOP, now)
-                else:
-                    # In sampling / review stage: conveyor is managed by sampler jogs
-                    conveyor.update(now)
-            else:
+            if commands.state is not BatchState.SORTING:
+                # In SORTING the conveyor is owned by SortingFlow; elsewhere BatchController drives it
                 conveyor.apply(commands.conveyor, now)
 
             if conn is not None and batch_id is not None:
@@ -599,18 +733,25 @@ def main(argv: list[str] | None = None) -> None:
                 )
                 # the heartbeat is wall-clock, so it is throttled on real time
                 if state_changed or real - last_live >= args.live_interval:
-                    components_snapshot = {
-                        "conveyor": {
-                            "busy": conveyor.busy,
-                            "position_steps": conveyor.position_steps,
-                            "last_result": conveyor.last_result,
-                        },
-                        "carriage": {
-                            "state": carriage_driver.state,
-                            "current_bin": carriage_driver.current_bin,
-                            "last_fault": carriage_driver.last_fault,
-                        },
+                    components_snapshot = health.snapshot()
+                    components_snapshot["conveyor"] = {
+                        **components_snapshot.get("conveyor", {}),
+                        "busy": conveyor.busy,
+                        "position_steps": conveyor.position_steps,
+                        "last_result": conveyor.last_result,
                     }
+                    components_snapshot["carriage"] = {
+                        **components_snapshot.get("carriage", {}),
+                        "state": carriage_driver.state,
+                        "current_bin": carriage_driver.current_bin,
+                        "last_fault": carriage_driver.last_fault,
+                    }
+                    active_prompt_for_db = None
+                    if sorting_flow is not None and sorting_flow.active_prompt:
+                        active_prompt_for_db = sorting_flow.active_prompt.to_dict()
+                    elif controller.active_prompt is not None:
+                        ap = controller.active_prompt
+                        active_prompt_for_db = ap.to_dict() if hasattr(ap, "to_dict") else ap
                     db.update_live(
                         conn,
                         state=commands.state.value,
@@ -622,6 +763,7 @@ def main(argv: list[str] | None = None) -> None:
                         conveyor=commands.conveyor.value,
                         alarms=commands.alarms,
                         components=components_snapshot,
+                        active_prompt=active_prompt_for_db,
                         **readings,
                     )
                     last_live = real

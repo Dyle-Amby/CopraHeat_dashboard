@@ -162,8 +162,9 @@ class TestSortingFlow(unittest.TestCase):
         self.flow.update(now=108.0, conveyor_busy=False, conveyor_last_result="done", bin_kg=10.0)
         self.assertEqual(self.flow.stage, SortingStage.VERIFY)
 
-        # Tick 3: Scale settles (1.0s) and rises by 0.50 kg (10.50 kg)
-        self.flow.update(now=109.5, conveyor_busy=False, bin_kg=10.50)
+        # Tick 3: Scale settles and records 5 stable readings within 0.03 kg (Item 8)
+        for t in (109.1, 109.2, 109.3, 109.4, 109.5):
+            self.flow.update(now=t, conveyor_busy=False, bin_kg=10.50)
         self.assertEqual(self.flow.stage, SortingStage.DONE)
         self.assertTrue(self.flow.is_complete)
         self.assertAlmostEqual(self.flow.weight_out_kg, 0.50)
@@ -179,10 +180,11 @@ class TestSortingFlow(unittest.TestCase):
         self.assertIsNotNone(self.flow.active_prompt)
         self.assertEqual(self.flow.active_prompt.id, "bin_did_not_gain_weight")
 
-        # Operator overrides weight check
+        # Operator overrides weight check (Item 8: weight_out_kg is left None, never 0.0)
         self.flow.answer_prompt("override", now=107.0)
         self.assertEqual(self.flow.stage, SortingStage.DONE)
         self.assertTrue(self.flow.is_complete)
+        self.assertIsNone(self.flow.weight_out_kg)
 
 
 if __name__ == "__main__":

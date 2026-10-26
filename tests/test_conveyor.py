@@ -40,13 +40,12 @@ class TestSimulatedConveyor(unittest.TestCase):
         self.assertTrue(self.belt.busy)
 
     def test_creep_runs_continuously(self):
+        # Item 11: apply(SORT_CREEP) is a no-op; SortingFlow uses move() directly
         self.belt.apply(CREEP, 0.0)
-        self.assertTrue(self.belt.creeping)
-        self.belt.apply(CREEP, 600.0)
-        self.assertTrue(self.belt.busy)
+        self.assertFalse(self.belt.creeping)
+        self.assertFalse(self.belt.busy)
 
     def test_stop_ends_a_creep(self):
-        self.belt.apply(CREEP, 0.0)
         self.belt.apply(STOP, 1.0)
         self.assertFalse(self.belt.creeping)
         self.assertFalse(self.belt.busy)

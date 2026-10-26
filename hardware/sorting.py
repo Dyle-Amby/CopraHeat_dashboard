@@ -53,8 +53,9 @@ class SortingFlow:
     """State machine executing the complete sorting process."""
 
     config: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_GRADING_CONFIG))
-    chamber_to_camera_steps: int = 2000
-    discharge_total_steps: int = 3000
+    chamber_to_camera_steps: int = 0
+    discharge_total_steps: int = 0
+    camera_timeout_s: float = 10.0
     sample_hz: float = 400.0
     settle_s: float = 0.3
     bin_settle_s: float = 2.0
@@ -103,6 +104,11 @@ class SortingFlow:
         self.baseline_bin_kg: float | None = None
         self.weight_out_kg: float | None = None
         self._verify_started_at: float | None = None
+        self._verify_readings: list[float] = []
+        self._capture_requested_at: float | None = None
+        self._position_move_started_at: float | None = None
+        self._sample_move_started_at: float | None = None
+        self._discharge_move_started_at: float | None = None
 
         # Conveyor command output
         self.conveyor_command: ConveyorCommand = ConveyorCommand.STOP
@@ -112,24 +118,31 @@ class SortingFlow:
 
     def start(self, now: float) -> None:
         """Start or restart the sorting flow."""
+        # Build fresh sampler with existing config
+        self.sampler = SortingSampler(config=self.sampler.config)
         self.stage = SortingStage.POSITION
         self.stage_entered_at = now
         self.active_prompt = None
         self.alarms.clear()
         self._position_move_started = False
         self._position_move_done = False
+        self._position_move_started_at = None
         self._sample_move_started = False
+        self._sample_move_started_at = None
         self._sample_move_completed_at = None
         self._waiting_capture = False
         self.capture_requested = False
+        self._capture_requested_at = None
         self._carriage_move_started_at = None
         self.carriage_target = None
         self._discharge_move_started = False
+        self._discharge_move_started_at = None
         self._discharge_started_at = None
         self._discharge_done = False
         self.baseline_bin_kg = None
         self.weight_out_kg = None
         self._verify_started_at = None
+        self._verify_readings = []
         self.is_complete = False
 
     @property
@@ -145,91 +158,143 @@ class SortingFlow:
         return self.sampler.grade_ready
 
     def answer_prompt(self, action: str, now: float, operator_grade: str | None = None) -> bool:
-        """Handle operator response to a blocking prompt."""
+        """Handle operator response to a blocking prompt. Only clears active_prompt if action is valid."""
         if not self.active_prompt:
             return False
 
         prompt_id = self.active_prompt.id
-        self.active_prompt = None
 
         if prompt_id == "position_uncalibrated":
             if action == "override":
-                # Bypass position travel check and go straight to sample
+                self.active_prompt = None
                 self.stage = SortingStage.SAMPLE
                 self.stage_entered_at = now
                 return True
             elif action == "abort":
+                self.active_prompt = None
                 self.alarms.add("aborted")
                 return True
 
-        elif prompt_id == "positioning_stall":
-            if action == "retry":
-                self._position_move_started = False
-                self.stage_entered_at = now
-                return True
-            elif action == "abort":
-                self.alarms.add("aborted")
-                return True
-
-        elif prompt_id == "empty_belt_detected":
-            if action in ("proceed_anyway", "proceed"):
-                self.stage = SortingStage.SAMPLE
-                self.stage_entered_at = now
-                return True
-            elif action == "retry_position":
-                self._position_move_started = False
-                self.stage_entered_at = now
-                return True
-            elif action == "abort":
-                self.alarms.add("aborted")
-                return True
-
-        elif prompt_id == "sorting_needs_review":
-            if action in ("bad", "good", "great"):
-                self.sampler.operator_grade = action
-                self.stage = SortingStage.CARRIAGE
-                self.stage_entered_at = now
-                return True
-            elif action == "abort":
-                self.alarms.add("aborted")
-                return True
-
-        elif prompt_id == "carriage_fault":
-            if action == "retry":
-                self._carriage_move_started_at = None
-                return True
-            elif action == "abort":
-                self.alarms.add("aborted")
-                return True
-
-        elif prompt_id == "discharge_timeout":
-            if action == "retry":
-                self._discharge_move_started = False
-                self.stage_entered_at = now
-                return True
-            elif action == "proceed_to_verify":
+        elif prompt_id == "discharge_uncalibrated":
+            if action == "override":
+                self.active_prompt = None
                 self.stage = SortingStage.VERIFY
                 self.stage_entered_at = now
                 self._verify_started_at = now
                 return True
             elif action == "abort":
+                self.active_prompt = None
+                self.alarms.add("aborted")
+                return True
+
+        elif prompt_id == "positioning_stall":
+            if action == "retry":
+                self.active_prompt = None
+                self._position_move_started = False
+                self._position_move_started_at = None
+                self.stage_entered_at = now
+                return True
+            elif action == "abort":
+                self.active_prompt = None
+                self.alarms.add("aborted")
+                return True
+
+        elif prompt_id == "camera_timeout":
+            if action == "retry_capture":
+                self.active_prompt = None
+                self._waiting_capture = False
+                self.capture_requested = False
+                self._capture_requested_at = None
+                return True
+            elif action == "skip_sample":
+                self.active_prompt = None
+                self.sampler.record_capture(None)
+                self._waiting_capture = False
+                self.capture_requested = False
+                self._capture_requested_at = None
+                self._sample_move_started = False
+                self._sample_move_completed_at = None
+                return True
+            elif action == "abort":
+                self.active_prompt = None
+                self.alarms.add("aborted")
+                return True
+
+        elif prompt_id == "empty_belt_detected":
+            if action in ("proceed_anyway", "proceed"):
+                self.active_prompt = None
+                self.stage = SortingStage.SAMPLE
+                self.stage_entered_at = now
+                return True
+            elif action == "retry_position":
+                self.active_prompt = None
+                self._position_move_started = False
+                self._position_move_started_at = None
+                self.stage_entered_at = now
+                return True
+            elif action == "abort":
+                self.active_prompt = None
+                self.alarms.add("aborted")
+                return True
+
+        elif prompt_id == "sorting_needs_review":
+            if action in ("bad", "good", "great"):
+                self.active_prompt = None
+                self.sampler.operator_grade = action
+                self.stage = SortingStage.CARRIAGE
+                self.stage_entered_at = now
+                return True
+            elif action == "abort":
+                self.active_prompt = None
+                self.alarms.add("aborted")
+                return True
+
+        elif prompt_id == "carriage_fault":
+            if action == "retry":
+                self.active_prompt = None
+                self._carriage_move_started_at = None
+                return True
+            elif action == "abort":
+                self.active_prompt = None
+                self.alarms.add("aborted")
+                return True
+
+        elif prompt_id == "discharge_timeout":
+            if action == "retry":
+                self.active_prompt = None
+                self._discharge_move_started = False
+                self._discharge_move_started_at = None
+                self.stage_entered_at = now
+                return True
+            elif action == "proceed_to_verify":
+                self.active_prompt = None
+                self.stage = SortingStage.VERIFY
+                self.stage_entered_at = now
+                self._verify_started_at = now
+                return True
+            elif action == "abort":
+                self.active_prompt = None
                 self.alarms.add("aborted")
                 return True
 
         elif prompt_id == "bin_did_not_gain_weight":
             if action == "override":
-                if self.weight_out_kg is None:
-                    self.weight_out_kg = 0.0
+                self.active_prompt = None
+                # Never set 0.0 on an override; leave None
                 self.stage = SortingStage.DONE
                 self.is_complete = True
                 return True
             elif action == "retry_discharge":
+                self.active_prompt = None
                 self.stage = SortingStage.DISCHARGE
                 self.stage_entered_at = now
                 self._discharge_move_started = False
+                self._discharge_move_started_at = None
                 self._discharge_started_at = None
+                self._verify_readings = []
                 return True
             elif action == "abort":
+                self.active_prompt = None
                 self.alarms.add("aborted")
                 return True
 
@@ -248,6 +313,7 @@ class SortingFlow:
         operator_grade: str | None = None,
         copra_present: bool = True,
         frame_vector: Sequence[float] | None = None,
+        capture_done: bool = False,
     ) -> None:
         """Advance sorting state machine for one supervisor tick."""
         if self.is_complete:
@@ -256,14 +322,23 @@ class SortingFlow:
             self.capture_requested = False
             return
 
+        effective_grade = operator_grade or getattr(self.sampler, "operator_grade", None) or self.sampler.batch_grade
+
+        # Item 7: Control Panel override_grade releases sorting_needs_review
+        if self.active_prompt and self.active_prompt.id == "sorting_needs_review":
+            if operator_grade in ("bad", "good", "great"):
+                self.sampler.operator_grade = operator_grade
+                self.alarms.discard("sorting_needs_review")
+                self.stage = SortingStage.CARRIAGE
+                self.stage_entered_at = now
+                self.active_prompt = None
+
         # If a blocking prompt is waiting for operator, hold machine safely
         if self.active_prompt is not None:
             self.conveyor_command = ConveyorCommand.STOP
             self.conveyor_move_steps = 0
             self.capture_requested = False
             return
-
-        effective_grade = operator_grade or getattr(self.sampler, "operator_grade", None) or self.sampler.batch_grade
 
         # ---------------------------------------------------------------------
         # Stage 1: POSITION
@@ -283,13 +358,15 @@ class SortingFlow:
             if not self._position_move_started:
                 # Trigger non-blocking move chamber -> camera
                 self._position_move_started = True
+                self._position_move_started_at = now
                 self.conveyor_command = ConveyorCommand.SORT_CREEP
                 self.conveyor_move_steps = self.chamber_to_camera_steps
                 self.conveyor_move_hz = self.sample_hz
                 return
 
-            # Waiting for position move to finish
-            if conveyor_busy:
+            # Wait short start grace (0.15s) so tx_busy lag doesn't treat move as immediately done
+            move_age = now - (self._position_move_started_at or now)
+            if conveyor_busy or move_age < 0.15:
                 self.conveyor_command = ConveyorCommand.SORT_CREEP
                 self.conveyor_move_steps = 0
                 if now - self.stage_entered_at > self.position_timeout_s:
@@ -302,8 +379,8 @@ class SortingFlow:
                     self.alarms.add("conveyor_stall")
                 return
 
-            # Move has finished
-            if conveyor_last_result in ("stalled", "stopped", "refused"):
+            # Move has finished - require conveyor_last_result == "done"
+            if conveyor_last_result != "done":
                 self.active_prompt = Prompt(
                     id="positioning_stall",
                     message=f"Conveyor position move failed ({conveyor_last_result}).",
@@ -362,6 +439,7 @@ class SortingFlow:
                     steps = self.sampler.step_forward()
                     if steps > 0:
                         self._sample_move_started = True
+                        self._sample_move_started_at = now
                         self.conveyor_command = ConveyorCommand.SORT_CREEP
                         self.conveyor_move_steps = steps
                         self.conveyor_move_hz = self.sample_hz
@@ -370,17 +448,29 @@ class SortingFlow:
                 else:
                     # Initial sample point (position 0) or retry in-place
                     self._sample_move_started = True
+                    self._sample_move_started_at = None
                     self.conveyor_command = ConveyorCommand.STOP
                     self.conveyor_move_steps = 0
                     self._sample_move_completed_at = now
                     self._waiting_capture = False
                     self.capture_requested = False
 
-            # Sub-step B: Jog move in progress -> wait for completion
-            if conveyor_busy:
+            # Sub-step B: Jog move in progress -> wait for completion with start grace
+            jog_age = now - (self._sample_move_started_at or now)
+            if self._sample_move_started_at is not None and (conveyor_busy or jog_age < 0.15):
                 self.conveyor_command = ConveyorCommand.SORT_CREEP
                 self.conveyor_move_steps = 0
                 self.capture_requested = False
+                return
+
+            if self._sample_move_started_at is not None and conveyor_last_result != "done":
+                self.active_prompt = Prompt(
+                    id="positioning_stall",
+                    message=f"Conveyor jog failed ({conveyor_last_result}).",
+                    options=["retry", "abort"],
+                    created_at=now,
+                )
+                self.alarms.add("conveyor_stall")
                 return
 
             # Sub-step C: Move just finished -> start settle timer
@@ -401,18 +491,33 @@ class SortingFlow:
             # Sub-step E: Settle complete -> request camera capture
             if not self._waiting_capture:
                 self._waiting_capture = True
+                self._capture_requested_at = now
                 self.capture_requested = True
                 self.conveyor_command = ConveyorCommand.STOP
                 self.conveyor_move_steps = 0
                 return
 
-            # Sub-step F: Capture received
-            if frame_vector is not None:
-                # Record frame in sampler
+            # Camera timeout check
+            if self._waiting_capture and self._capture_requested_at is not None:
+                if (now - self._capture_requested_at) > self.camera_timeout_s:
+                    self.active_prompt = Prompt(
+                        id="camera_timeout",
+                        message=f"Camera capture timed out after {self.camera_timeout_s:.0f}s. Check USB webcam or retry.",
+                        options=["retry_capture", "skip_sample", "abort"],
+                        created_at=now,
+                    )
+                    self.alarms.add("camera_timeout")
+                    return
+
+            # Sub-step F: Capture received (Item 4: frame_vector may be None if rejected, keyed by capture_done)
+            if capture_done or frame_vector is not None:
+                # Record frame in sampler (even None for rejected frame)
                 self.sampler.record_capture(frame_vector)
                 self.capture_requested = False
                 self._waiting_capture = False
+                self._capture_requested_at = None
                 self._sample_move_started = False
+                self._sample_move_started_at = None
                 self._sample_move_completed_at = None
                 self.conveyor_command = ConveyorCommand.STOP
                 self.conveyor_move_steps = 0
@@ -487,15 +592,27 @@ class SortingFlow:
         # ---------------------------------------------------------------------
         elif self.stage is SortingStage.DISCHARGE:
             self.capture_requested = False
+            if self.discharge_total_steps <= 0:
+                self.active_prompt = Prompt(
+                    id="discharge_uncalibrated",
+                    message="Discharge total steps is 0 (uncalibrated). Calibrate in /components or override.",
+                    options=["override", "abort"],
+                    created_at=now,
+                )
+                self.conveyor_command = ConveyorCommand.STOP
+                return
+
             if not self._discharge_move_started:
                 self._discharge_move_started = True
                 self._discharge_started_at = now
+                self._discharge_move_started_at = now
                 self.conveyor_command = ConveyorCommand.SORT_CREEP
                 self.conveyor_move_steps = self.discharge_total_steps
                 self.conveyor_move_hz = self.sample_hz
                 return
 
-            if conveyor_busy:
+            discharge_age = now - (self._discharge_move_started_at or now)
+            if conveyor_busy or discharge_age < 0.15:
                 self.conveyor_command = ConveyorCommand.SORT_CREEP
                 self.conveyor_move_steps = 0
                 if self._discharge_started_at and (now - self._discharge_started_at) > self.discharge_timeout_s:
@@ -508,8 +625,8 @@ class SortingFlow:
                     )
                 return
 
-            # Move finished
-            if conveyor_last_result in ("stalled", "stopped", "refused"):
+            # Move finished - require conveyor_last_result == "done"
+            if conveyor_last_result != "done":
                 self.active_prompt = Prompt(
                     id="discharge_timeout",
                     message=f"Discharge conveyor move failed ({conveyor_last_result}).",
@@ -536,34 +653,70 @@ class SortingFlow:
 
             if self._verify_started_at is None:
                 self._verify_started_at = now
+                self._verify_readings = []
 
             elapsed = now - self._verify_started_at
             # Allow bin load cell to settle
             if elapsed < self.bin_settle_s:
                 return
 
-            baseline = self.baseline_bin_kg or 0.0
-            current = bin_kg or baseline
-            weight_rise = max(0.0, current - baseline)
+            # Item 8: A None baseline must not count as zero; dead cell raises bin_scale_fault
+            if self.baseline_bin_kg is None:
+                if bin_kg is not None:
+                    self.baseline_bin_kg = bin_kg
+                else:
+                    self.alarms.add("bin_scale_fault")
+                    if elapsed >= self.bin_verify_timeout_s:
+                        self.active_prompt = Prompt(
+                            id="bin_did_not_gain_weight",
+                            message="Bin scale not responding (no readings). Verify scale or choose action:",
+                            options=["retry_discharge", "override", "abort"],
+                            created_at=now,
+                        )
+                    return
 
-            if weight_rise >= self.min_weight_rise_kg:
-                self.weight_out_kg = weight_rise
-                self.stage = SortingStage.DONE
-                self.is_complete = True
+            if bin_kg is None:
+                self.alarms.add("bin_scale_fault")
+                if elapsed >= self.bin_verify_timeout_s:
+                    self.active_prompt = Prompt(
+                        id="bin_did_not_gain_weight",
+                        message="Bin scale not responding during verification. Choose action:",
+                        options=["retry_discharge", "override", "abort"],
+                        created_at=now,
+                    )
                 return
 
-            # If elapsed past verification timeout without weight rise
+            self._verify_readings.append(bin_kg)
+            if len(self._verify_readings) > 10:
+                self._verify_readings.pop(0)
+
+            # Check stable rise: 5 readings within 0.03 kg
+            if len(self._verify_readings) >= 5:
+                window = self._verify_readings[-5:]
+                spread = max(window) - min(window)
+                if spread <= 0.03:
+                    stable_val = sum(window) / len(window)
+                    weight_rise = max(0.0, stable_val - self.baseline_bin_kg)
+                    if weight_rise >= self.min_weight_rise_kg:
+                        self.weight_out_kg = weight_rise
+                        self.stage = SortingStage.DONE
+                        self.is_complete = True
+                        return
+
+            # If elapsed past verification timeout without stable weight rise
             if elapsed >= self.bin_verify_timeout_s:
+                current = bin_kg
+                weight_rise = max(0.0, current - self.baseline_bin_kg)
                 self.active_prompt = Prompt(
                     id="bin_did_not_gain_weight",
                     message=(
                         f"Target bin did not gain weight after discharge "
-                        f"(baseline: {baseline:.2f} kg, current: {current:.2f} kg, rise: {weight_rise:.2f} kg). "
+                        f"(baseline: {self.baseline_bin_kg:.2f} kg, current: {current:.2f} kg, rise: {weight_rise:.2f} kg). "
                         "Verify bin copra drop or choose action:"
                     ),
                     options=["retry_discharge", "override", "abort"],
                     created_at=now,
-                    context={"baseline_kg": baseline, "current_kg": current, "rise_kg": weight_rise},
+                    context={"baseline_kg": self.baseline_bin_kg, "current_kg": current, "rise_kg": weight_rise},
                 )
                 return
 

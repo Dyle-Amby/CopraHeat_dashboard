@@ -329,6 +329,7 @@ class BatchController:
 
         p_id = self.active_prompt.id
         max_duration = getattr(self.endpoint, "max_time_s", 28800.0)
+        now_val = now if now is not None else getattr(self, "_last_now", 0.0)
         if p_id == "drying_timer_expired":
             if action.startswith("extend_"):
                 try:
@@ -336,9 +337,11 @@ class BatchController:
                     add_s = mins * 60.0
                 except Exception:
                     add_s = 1800.0
-                ref_time = self.drying_timer_deadline if self.drying_timer_deadline is not None else (now or 0.0)
-                max_deadline = (self._drying_started or 0.0) + max_duration
-                new_deadline = min(ref_time + add_s, max_deadline)
+                # Extend from max(deadline, now), capped at 8 h after drying start
+                base_time = max(self.drying_timer_deadline or 0.0, now_val)
+                start_time = self._drying_started if self._drying_started is not None else 0.0
+                max_deadline = start_time + max_duration
+                new_deadline = min(base_time + add_s, max_deadline)
                 self.drying_timer_deadline = new_deadline
                 self._alarms.discard("drying_timer_expired")
                 self.active_prompt = None
@@ -353,8 +356,9 @@ class BatchController:
                 self.abort(f"operator aborted on {p_id}")
                 self.active_prompt = None
                 return True
-            self.active_prompt = None
-            return True
+            elif action in ("retry", "proceed_to_verify", "override", "retry_discharge"):
+                self.active_prompt = None
+                return True
         return False
 
     def clear_prompt(self) -> None:
@@ -404,6 +408,7 @@ class BatchController:
 
     def update(self, i: Inputs) -> Commands:
         now = i.now
+        self._last_now = now
 
         if self._reset_requested:
             self._reset_requested = False
@@ -652,7 +657,9 @@ class BatchController:
         self.sample_total_n: int = 0
         self.sorting_config_snapshot: str | None = None
         self.drying_timed_out: bool = False
-        self.drying_timer_duration_s: float | None = None
+        # Preserve drying_timer_duration_s if set in IDLE prior to start
+        preserved_timer = getattr(self, "drying_timer_duration_s", None)
+        self.drying_timer_duration_s: float | None = preserved_timer
         self.drying_timer_deadline: float | None = None
         self.active_prompt: Prompt | None = None
         self._intake_skipped = False

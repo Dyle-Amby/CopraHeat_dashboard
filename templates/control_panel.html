@@ -13,6 +13,17 @@
   <strong>Calibration in progress.</strong> A maintenance/calibration session is currently active. Batch start is locked until calibration is completed or released.
 </div>
 
+<!-- ── Active Operator Prompt ──────────────────────────────────────────────── -->
+<div id="activePromptCard" class="alert d-none mb-3" style="border-left: 4px solid var(--gold); background: rgba(224, 168, 0, 0.08);" role="alert">
+  <div class="d-flex align-items-start gap-2">
+    <i class="bi bi-bell-fill mt-1" style="color:var(--gold); flex-shrink:0;"></i>
+    <div class="flex-fill">
+      <strong style="display:block; margin-bottom:6px;" id="promptMessage">Machine awaiting operator decision</strong>
+      <div id="promptOptions" class="d-flex flex-wrap gap-2"></div>
+    </div>
+  </div>
+</div>
+
 <div class="row g-4">
   <div class="col-lg-7">
     <div class="card-panel mb-4">
@@ -59,6 +70,19 @@
           <span class="override-sub">Manual endpoint while the humidity thresholds are still being calibrated. Goes to cooldown.</span>
         </div>
         <button class="btn-outline-ink cp-btn" data-command="end_drying" data-confirm="End drying now and move to cooldown?">End drying</button>
+      </div>
+
+      <!-- ── Drying timer ───────────────────────────────────────────────────── -->
+      <div class="override-row" id="dryingTimerRow">
+        <div>
+          <span class="override-label">Drying timer</span>
+          <span class="override-sub">Set a timed endpoint. Machine will prompt when elapsed. Extends from the current deadline if already set.</span>
+        </div>
+        <form class="d-flex align-items-center gap-2" id="dryingTimerForm">
+          <input type="number" class="cp-input" id="dryingTimerInput" min="1" step="1" placeholder="60" style="width:70px;" aria-label="Drying timer duration in minutes">
+          <span class="stat-label">min</span>
+          <button type="submit" class="btn-outline-ink" id="dryingTimerBtn">Set timer</button>
+        </form>
       </div>
 
       <div class="override-row">

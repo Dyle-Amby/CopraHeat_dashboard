@@ -87,9 +87,13 @@ class StepperConveyor(BaseConveyor):
         self._target_steps = 0
         self._move_forward = True
         self._was_busy = False
+        self._moved_at: float | None = None
 
     @property
     def busy(self) -> bool:
+        # Treat the belt as busy for the first 0.15 s after move() to bridge tx lag
+        if self._moved_at is not None and (time.monotonic() - self._moved_at) < 0.15:
+            return True
         is_busy = self.stepper.busy
         if self._was_busy and not is_busy:
             self._was_busy = False
@@ -110,6 +114,7 @@ class StepperConveyor(BaseConveyor):
         self._target_steps = steps
         self._move_forward = forward
         self.last_result = None
+        self._moved_at = time.monotonic()
         self.stepper.start(steps, rate, forward=forward)
         self._was_busy = True
         return True
@@ -140,9 +145,8 @@ class StepperConveyor(BaseConveyor):
             if not self._advance_done and not self.busy:
                 self.move(self.hopper_to_chamber_steps, self.default_hz, forward=True)
         elif command is ConveyorCommand.SORT_CREEP:
-            self.creeping = True
-            if not self.busy:
-                self.move(200, self.default_hz, forward=True)
+            # Item 11: No-op; SortingFlow uses move() directly with exact step counts
+            pass
         else:
             if self.busy or self.creeping:
                 self.stop()
@@ -245,9 +249,8 @@ class SimulatedConveyor(BaseConveyor):
                 self.position_steps += self._move_steps
             self._busy = self._moving_until is not None
         elif command is ConveyorCommand.SORT_CREEP:
-            self.creeping = True
-            self._moving_until = None
-            self._busy = True
+            # Item 11: No-op; SortingFlow uses move() directly with exact step counts
+            pass
         else:
             self.stop(now)
 
@@ -263,7 +266,7 @@ class CarriageDriver:
         default_hz: float = 400.0,
         release_within: int = 400,
         max_travel_steps: int = 6000,
-        invert_dir: bool = False,
+        invert_dir: bool = True,
     ):
         self.order = order
         self.bins = bins
@@ -306,11 +309,18 @@ class CarriageDriver:
             self.last_fault = str(exc)
         return None
 
+    def clear_fault(self) -> None:
+        """Reset fault state so goto can be re-attempted after operator prompt."""
+        if self.state == "fault":
+            self.state = "idle"
+            self.last_fault = None
+
     def goto(self, target_bin: str, hz: float | None = None, now: float | None = None) -> bool:
         """Initiate non-blocking move to target bin."""
         if target_bin not in self.stops:
             raise ValueError(f"unknown bin {target_bin!r}; expected one of {self.bins}")
-        if self.state == "moving":
+        # Item 13: After a fault, goto must not auto-retry without explicit clear_fault / prompt answer
+        if self.state in ("moving", "fault"):
             return False
 
         target_switch = self.stops[target_bin]
@@ -323,7 +333,8 @@ class CarriageDriver:
             self.state = "at_target"
             return True
 
-        up = None
+        # Item 13: If position is unknown, home DOWN first like the bench
+        up = False
         if current_loc is not None:
             up = moving_up(current_loc, target_switch, order=self.order)
 
@@ -338,7 +349,7 @@ class CarriageDriver:
         self._target_switch = target_switch
         rate = hz if hz is not None and hz > 0 else self.default_hz
 
-        forward = bool(up) if up is not None else True
+        forward = bool(up) if up is not None else False
         self.stepper.start(self.max_travel_steps, rate, forward=forward)
         self._move_started_at = time.monotonic()
         self.state = "moving"
