@@ -70,7 +70,7 @@ class TestCalibrationCommands(AppCase):
     def test_camera_preview_route_returns_ok(self):
         resp = self.client.get("/api/camera/preview")
         self.assertEqual(resp.status_code, 200)
-        self.assertIn(resp.content_type, ["image/jpeg", "image/svg+xml"])
+        self.assertIn(resp.mimetype, ["image/jpeg", "image/svg+xml"])
 
     def test_camera_test_component_with_lock(self):
         self.client.post("/api/commands", json={"name": "acquire_calibration_lock"})

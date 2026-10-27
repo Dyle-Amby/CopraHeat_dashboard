@@ -9,7 +9,7 @@ import json
 import math
 import os
 from datetime import datetime
-from zipfile import Path
+from pathlib import Path
 
 from flask import (
     Flask, g, abort, flash, jsonify, redirect, render_template,
