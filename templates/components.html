@@ -557,6 +557,7 @@
         <section class="card mb-3 border-info" id="camera-preview-zone">
             <div class="card-header bg-light d-flex justify-content-between align-items-center">
                 <span class="fw-bold"><i class="bi bi-camera-video me-1"></i> Live Stream &amp; Alignment Preview</span>
+                <span class="badge bg-light text-dark">Calibration lock required</span>
                 <div class="btn-group btn-group-sm">
                     <button class="btn btn-outline-secondary" id="btnToggleCrosshair">
                         <i class="bi bi-crosshair"></i> Toggle Crosshairs
@@ -603,9 +604,8 @@
                 <div class="row align-items-center mb-3">
                     <div class="col-md-8">
                         <p class="small text-muted mb-0">
-                            Captures an instantaneous frame, runs the full preprocessing and classifier inference
-                            pipeline,
-                            and computes the blur Laplacian focus score.
+                            Captures a real frame, runs the loaded classifier pipeline, and computes the blur
+                            Laplacian focus score. The live preview captures one frame per second while enabled.
                         </p>
                     </div>
                     <div class="col-md-4 text-end">

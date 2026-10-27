@@ -545,31 +545,51 @@
             });
         }
 
-        let previewInterval = null;
+        let previewActive = false;
+        let previewRequestPending = false;
+        let previewTimeout = null;
         const btnTogglePreview = document.getElementById('btnTogglePreview');
         const cameraPreviewImg = document.getElementById('cameraPreviewImg');
         const previewFpsStatus = document.getElementById('previewFpsStatus');
 
-        function refreshPreview() {
-            if (cameraPreviewImg) {
-                cameraPreviewImg.src = `/api/camera/preview?t=${Date.now()}`;
+        async function refreshPreview() {
+            if (!previewActive || previewRequestPending) return;
+            previewRequestPending = true;
+            try {
+                const result = await sendCommand('capture_camera_preview', {});
+                if (!result.ok) {
+                    previewActive = false;
+                    if (previewFpsStatus) previewFpsStatus.textContent = result.message || 'Preview failed';
+                    if (btnTogglePreview) {
+                        btnTogglePreview.innerHTML = '<i class="bi bi-play-circle"></i> Start Live Preview';
+                        btnTogglePreview.className = 'btn btn-outline-primary';
+                    }
+                    return;
+                }
+                if (cameraPreviewImg) {
+                    cameraPreviewImg.src = `/api/camera/preview?t=${Date.now()}`;
+                }
+                if (previewFpsStatus) previewFpsStatus.textContent = 'Live preview (1 frame/s)';
+            } finally {
+                previewRequestPending = false;
+                if (previewActive) previewTimeout = setTimeout(refreshPreview, 1000);
             }
         }
 
         if (btnTogglePreview) {
-            btnTogglePreview.addEventListener('click', () => {
-                if (previewInterval) {
-                    clearInterval(previewInterval);
-                    previewInterval = null;
+            btnTogglePreview.addEventListener('click', async () => {
+                if (previewActive) {
+                    previewActive = false;
+                    clearTimeout(previewTimeout);
                     btnTogglePreview.innerHTML = '<i class="bi bi-play-circle"></i> Start Live Preview';
                     btnTogglePreview.className = 'btn btn-outline-primary';
                     if (previewFpsStatus) previewFpsStatus.textContent = 'Preview Paused';
                 } else {
-                    refreshPreview();
-                    previewInterval = setInterval(refreshPreview, 1000);
+                    previewActive = true;
                     btnTogglePreview.innerHTML = '<i class="bi bi-pause-circle"></i> Pause Live Preview';
                     btnTogglePreview.className = 'btn btn-primary';
-                    if (previewFpsStatus) previewFpsStatus.textContent = 'Live (1.0 FPS)';
+                    if (previewFpsStatus) previewFpsStatus.textContent = 'Connecting to camera…';
+                    await refreshPreview();
                 }
             });
         }
@@ -583,7 +603,9 @@
                 try {
                     const res = await sendCommand('test_component', { component: 'camera' });
                     if (!res.ok) return;
-                    setTimeout(refreshPreview, 500); // refresh the image with the tested frame
+                    if (cameraPreviewImg) {
+                        cameraPreviewImg.src = `/api/camera/preview?t=${Date.now()}`;
+                    }
                     if (res.message) alert(res.message);
                 } catch (err) {
                     alert('Camera test failed: ' + err.message);

@@ -149,6 +149,7 @@ class TestMaintenanceGate(unittest.TestCase):
             ("goto_carriage_bin", {"bin": "great"}),
             ("calibrate_hopper_scale", {"ref_weight_kg": 1.0}),
             ("calibrate_bin_scale", {"bin": "great", "action": "tare"}),
+            ("capture_camera_preview", {}),
             ("test_component", {"component": "camera"}),
         ):
             with self.subTest(name=name):
@@ -168,6 +169,7 @@ class TestMaintenanceGate(unittest.TestCase):
             ("goto_carriage_bin", {"bin": "great"}),
             ("calibrate_hopper_scale", {"ref_weight_kg": 1.0}),
             ("calibrate_bin_scale", {"bin": "great", "action": "tare"}),
+            ("capture_camera_preview", {}),
             ("test_component", {"component": "camera"}),
         ):
             with self.subTest(name=name, locked=True):

@@ -47,6 +47,7 @@ VALID_COMMAND_NAMES = COMMAND_NAMES | frozenset({
     "calibrate_hopper_scale",
     "calibrate_bin_scale",
     "set_hopper_servo",
+    "capture_camera_preview",
     "test_component",
 })
 

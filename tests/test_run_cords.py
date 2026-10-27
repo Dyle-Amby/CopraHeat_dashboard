@@ -1,10 +1,16 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from types import SimpleNamespace
 
 from hardware import db
-from hardware.run_cords import Actuators, capture_camera_test_frame
+from hardware.run_cords import (
+    Actuators,
+    capture_camera_frame,
+    capture_camera_test_frame,
+    save_camera_preview,
+)
 
 
 class FakeHX711:
@@ -69,6 +75,11 @@ class ActuatorCalibrationTests(unittest.TestCase):
 
 
 class CameraTestReadinessTests(unittest.TestCase):
+    def test_preview_capture_does_not_require_classifier(self):
+        frame = object()
+        camera = SimpleNamespace(read_frame=lambda: (True, frame))
+        self.assertIs(capture_camera_frame(camera), frame)
+
     def test_camera_test_rejects_missing_camera(self):
         classifier = SimpleNamespace(is_ready=True)
         with self.assertRaisesRegex(RuntimeError, "camera is not initialized"):
@@ -83,7 +94,7 @@ class CameraTestReadinessTests(unittest.TestCase):
     def test_camera_test_rejects_missing_frame(self):
         camera = SimpleNamespace(read_frame=lambda: (False, None))
         classifier = SimpleNamespace(is_ready=True)
-        with self.assertRaisesRegex(RuntimeError, "no frame captured"):
+        with self.assertRaisesRegex(RuntimeError, "no frame"):
             capture_camera_test_frame(camera, classifier)
 
     def test_camera_test_returns_real_frame(self):
@@ -92,6 +103,29 @@ class CameraTestReadinessTests(unittest.TestCase):
         classifier = SimpleNamespace(is_ready=True)
 
         self.assertIs(capture_camera_test_frame(camera, classifier), frame)
+
+    def test_preview_write_uses_encoded_jpeg_and_atomic_replace(self):
+        class EncodedFrame:
+            @staticmethod
+            def tobytes():
+                return b"jpeg-data"
+
+        cv2 = SimpleNamespace(imencode=lambda ext, frame: (ext == ".jpg", EncodedFrame()))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "tmp" / "camera_preview.jpg"
+            with patch.dict("sys.modules", {"cv2": cv2}):
+                save_camera_preview(object(), target)
+
+            self.assertEqual(target.read_bytes(), b"jpeg-data")
+            self.assertFalse(target.with_name("camera_preview.jpg.tmp").exists())
+
+    def test_preview_write_surfaces_encode_failure(self):
+        cv2 = SimpleNamespace(imencode=lambda ext, frame: (False, None))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "camera_preview.jpg"
+            with patch.dict("sys.modules", {"cv2": cv2}):
+                with self.assertRaisesRegex(RuntimeError, "JPEG encoding failed"):
+                    save_camera_preview(object(), target)
 
 
 if __name__ == "__main__":

@@ -81,3 +81,13 @@ class TestCalibrationCommands(AppCase):
         self.assertEqual(resp.status_code, 202)
         pending = db.pending_commands(self.conn)
         self.assertTrue(any(r["name"] == "test_component" for r in pending))
+
+    def test_camera_preview_capture_with_lock(self):
+        self.client.post("/api/commands", json={"name": "acquire_calibration_lock"})
+        resp = self.client.post("/api/commands", json={
+            "name": "capture_camera_preview",
+            "payload": {},
+        })
+        self.assertEqual(resp.status_code, 202)
+        pending = db.pending_commands(self.conn)
+        self.assertTrue(any(r["name"] == "capture_camera_preview" for r in pending))

@@ -39,18 +39,37 @@ _FINISHED = (BatchState.COMPLETE, BatchState.ABORTED)
 TIGHTEST_TIMER_S = 5.0
 
 
-def capture_camera_test_frame(webcam, classifier):
+def capture_camera_frame(webcam):
     if webcam is None:
-        raise RuntimeError("camera test failed: camera is not initialized")
-    if classifier is None or not classifier.is_ready:
-        raise RuntimeError("camera test failed: vision model is not loaded")
+        raise RuntimeError("camera is not initialized")
     try:
         ok, frame = webcam.read_frame()
     except Exception as exc:
         raise RuntimeError(f"camera capture failed: {exc}") from exc
     if not ok or frame is None:
-        raise RuntimeError("camera test failed: no frame captured")
+        raise RuntimeError("camera returned no frame")
     return frame
+
+
+def capture_camera_test_frame(webcam, classifier):
+    if classifier is None or not classifier.is_ready:
+        raise RuntimeError("camera test failed: vision model is not loaded")
+    return capture_camera_frame(webcam)
+
+
+def save_camera_preview(frame, preview_path: Path) -> None:
+    try:
+        import cv2
+
+        ok, encoded = cv2.imencode(".jpg", frame)
+        if not ok:
+            raise RuntimeError("JPEG encoding failed")
+        preview_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_file = preview_path.with_name(f"{preview_path.name}.tmp")
+        tmp_file.write_bytes(encoded.tobytes())
+        tmp_file.replace(preview_path)
+    except Exception as exc:
+        raise RuntimeError(f"could not save camera preview: {exc}") from exc
 
 
 class SensorCache:
@@ -482,6 +501,8 @@ def main(argv: list[str] | None = None) -> None:
     last_alarms: frozenset[str] = frozenset()
     batch_id: int | None = None
     batch_drying_timed_out_saved: bool = False
+    camera_last_test = None
+    camera_last_capture_at = None
 
     unclean_prompt_active = False
     if conn is not None:
@@ -505,8 +526,6 @@ def main(argv: list[str] | None = None) -> None:
         while True:
             real = time.monotonic()
             now = (real - started_real) * args.speed
-            camera_last_test = None
-
             # operator commands arrive through the database, never through a pin
             if conn is not None:
                 for row in db.pending_commands(conn):
@@ -719,6 +738,15 @@ def main(argv: list[str] | None = None) -> None:
                             db.set_setting(conn, "conveyor_cal_stale", stale_flag)
                             message = f"Conveyor calibration stale flag set to {stale_flag}"
 
+                        elif row["name"] == "capture_camera_preview":
+                            if args.simulate or args.dry_run:
+                                raise RuntimeError("live camera preview is unavailable in simulation/dry-run mode")
+                            frame = capture_camera_frame(webcam)
+                            save_camera_preview(frame, Path(BASE_DIR) / "tmp" / "camera_preview.jpg")
+                            camera_last_capture_at = datetime.now().isoformat()
+                            health.record_ok("camera", now)
+                            message = "Camera preview frame captured"
+
                         elif row["name"] == "test_component":
                             payload_dict = json.loads(row["payload"]) if row["payload"] else {}
                             comp = payload_dict.get("component")
@@ -766,18 +794,11 @@ def main(argv: list[str] | None = None) -> None:
 
                                 latency_ms = (time.monotonic() - t0) * 1000.0
 
-                                # Save atomic preview frame
                                 if frame is not None:
-                                    try:
-                                        import cv2
-                                        tmp_dir = Path(BASE_DIR) / "tmp"
-                                        tmp_dir.mkdir(parents=True, exist_ok=True)
-                                        preview_path = tmp_dir / "camera_preview.jpg"
-                                        tmp_file = tmp_dir / "camera_preview.jpg.tmp"
-                                        cv2.imwrite(str(tmp_file), frame)
-                                        tmp_file.replace(preview_path)
-                                    except Exception as exc:
-                                        print(f"Warning: could not write camera preview: {exc}")
+                                    save_camera_preview(
+                                        frame, Path(BASE_DIR) / "tmp" / "camera_preview.jpg"
+                                    )
+                                    camera_last_capture_at = datetime.now().isoformat()
 
                                 test_result = {
                                     "grade": top_grade,
@@ -1201,6 +1222,7 @@ def main(argv: list[str] | None = None) -> None:
                     components_snapshot["camera"] = {
                         **components_snapshot.get("camera", {}),
                         "last_test": camera_last_test,
+                        "last_capture_at": camera_last_capture_at,
                         "model_ready": classifier.is_ready if classifier else False,
                     }
                     active_prompt_for_db = None
