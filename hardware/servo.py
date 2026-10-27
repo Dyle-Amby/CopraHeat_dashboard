@@ -2,8 +2,8 @@
 
 Requires in /boot/firmware/config.txt:  dtoverlay=pwm-2chan
 Then verify with `pinctrl get 18` (should show a PWM function) and
-`ls /sys/class/pwm/` for the chip number. On the Pi 5 GPIO18 is expected
-to be chip 2, channel 2 -- confirm on the bench before trusting the defaults.
+`ls /sys/class/pwm/` for the chip number. On the current Pi 5 setup, GPIO18
+is PWM channel 2 on pwmchip0; verify the mapping on the target board.
 
 The signal is held continuously: the gate bears the copra load, so the servo
 must never go limp. Hardware PWM keeps running after the process exits, which
@@ -12,7 +12,7 @@ is what we want.
 
 
 class Servo:
-    def __init__(self, channel: int = 2, chip: int = 2, hz: float = 50.0, min_us: float = 500.0, max_us: float = 2500.0):
+    def __init__(self, channel: int = 2, chip: int = 0, hz: float = 50.0, min_us: float = 500.0, max_us: float = 2500.0):
         from rpi_hardware_pwm import HardwarePWM
 
         self._pwm = HardwarePWM(pwm_channel=channel, hz=hz, chip=chip)

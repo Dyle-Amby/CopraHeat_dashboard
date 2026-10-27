@@ -5,7 +5,7 @@ Run from inside CopraHeat_dashboard:
 
     python -m hardware.run_hopper --calibrate
     python -m hardware.run_hopper --target-kg 2.0 --scale 21500 \
-        --offset-closed 84210 --offset-open 83950 --closed-angle 0 --open-angle 90
+        --offset-closed 84210 --offset-open 83950 --closed-angle 180 --open-angle 0
 
 Calibration values are per-load-cell and per-machine; pass them as flags for
 now, they move to the settings table once the database exists.
@@ -24,7 +24,7 @@ from hardware.hopper import HopperGate
 def add_hardware_args(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--closed-angle", type=float, default=180.0)
     ap.add_argument("--open-angle", type=float, default=0.0)
-    ap.add_argument("--pwm-chip", type=int, default=2)
+    ap.add_argument("--pwm-chip", type=int, default=0)
     ap.add_argument("--pwm-channel", type=int, default=2)
 
 

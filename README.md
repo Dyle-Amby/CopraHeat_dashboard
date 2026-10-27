@@ -287,7 +287,7 @@ Free: None (GPIO25 drives fan relay, GPIO6 output stage died 2026-10-10). Reserv
 - 10 kΩ pull-downs on the heater SSR trigger (GPIO5 → GND) and on the fan transistor base, so neither can fire while GPIO floats during boot or a crashed control process.
 - 4.7 kΩ pull-up on the DS18B20 data line, plus `dtoverlay=w1-gpio,gpiopin=4` in `/boot/firmware/config.txt`.
 - DHT22 is read through the kernel IIO driver, not a Python bit-bang library (unreliable on the Pi 5's RP1): add `dtoverlay=dht11,gpiopin=26` to `config.txt` — the `dht11` driver handles DHT22 as well.
-- The servo uses hardware PWM: add `dtoverlay=pwm-2chan` to `config.txt`, then confirm with `pinctrl get 18` and `ls /sys/class/pwm/`. GPIO18 is expected to be chip 2 / channel 2 on the Pi 5 — verify on the bench and pass `--pwm-chip` / `--pwm-channel` to `run_hopper` if different.
+- The servo uses hardware PWM: add `dtoverlay=pwm-2chan` to `config.txt`, then confirm with `pinctrl get 18` and `ls /sys/class/pwm/`. On the current Pi 5 setup GPIO18 is pwmchip0 / channel 2; verify on the target board and pass `--pwm-chip` / `--pwm-channel` to `run_hopper` if different. The hopper gate is configured as 0° open and 180° closed.
 - HX711 tare offsets and scale are per-machine: run `python -m hardware.run_hopper --calibrate` after fabrication and pass the printed flags. The hopper cell is mounted on the gate, so it is tared in both the closed and open positions.
 - Stepper driver inputs (TB6600, HBS57H) use 2N2222A NPN sinking transistors on PUL/DIR, with PUL+ and DIR+ tied to a 5 V rail (common-anode sinking configuration). Relay and SSR triggers use an NPN buffer.
 - Limit switches are wired normally-closed with internal pull-ups, so a broken wire reads as "stop".

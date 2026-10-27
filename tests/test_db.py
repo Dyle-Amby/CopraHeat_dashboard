@@ -50,6 +50,28 @@ class TestSchema(DBCase):
         db.init(self.conn)
         self.assertEqual(db.get_settings(self.conn)["target_kg"], "3.5")
 
+    def test_init_migrates_legacy_servo_and_pwm_defaults(self):
+        db.set_setting(self.conn, "servo_closed_angle", "0.0")
+        db.set_setting(self.conn, "servo_open_angle", "90.0")
+        db.set_setting(self.conn, "pwm_chip", "2")
+
+        db.init(self.conn)
+
+        settings = db.get_settings(self.conn)
+        self.assertEqual(settings["servo_closed_angle"], "180.0")
+        self.assertEqual(settings["servo_open_angle"], "0.0")
+        self.assertEqual(settings["pwm_chip"], "0")
+
+    def test_init_preserves_custom_servo_settings(self):
+        db.set_setting(self.conn, "servo_closed_angle", "170.0")
+        db.set_setting(self.conn, "servo_open_angle", "12.0")
+
+        db.init(self.conn)
+
+        settings = db.get_settings(self.conn)
+        self.assertEqual(settings["servo_closed_angle"], "170.0")
+        self.assertEqual(settings["servo_open_angle"], "12.0")
+
     def test_init_migrates_legacy_batch_event_column(self):
         batch_id = db.start_batch(self.conn, target_kg=2.0)
         self.conn.execute("DROP TABLE batch_events")

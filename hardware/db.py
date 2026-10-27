@@ -55,9 +55,9 @@ DEFAULT_SETTINGS = {
     "hx711_scale": "1.0",
     "hx711_offset_closed": "0",
     "hx711_offset_open": "0",
-    "servo_closed_angle": "0.0",
-    "servo_open_angle": "90.0",
-    "pwm_chip": "2",
+    "servo_closed_angle": "180.0",
+    "servo_open_angle": "0.0",
+    "pwm_chip": "0",
     "pwm_channel": "2",
     "sample_interval_s": "10.0",
     # Unmeasured placeholder vision grading configuration
@@ -363,6 +363,27 @@ def init(conn: sqlite3.Connection) -> None:
         "INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)",
         [(k, v, stamp) for k, v in DEFAULT_SETTINGS.items()],
     )
+    legacy_servo_defaults = conn.execute(
+        """SELECT COUNT(*) FROM settings WHERE
+               (key = 'servo_closed_angle' AND value = '0.0') OR
+               (key = 'servo_open_angle' AND value = '90.0')"""
+    ).fetchone()[0]
+    legacy_pwm_default = conn.execute(
+        "SELECT value FROM settings WHERE key = 'pwm_chip'"
+    ).fetchone()
+    if legacy_servo_defaults == 2:
+        conn.executemany(
+            "UPDATE settings SET value = ?, updated_at = ? WHERE key = ?",
+            [
+                ("180.0", stamp, "servo_closed_angle"),
+                ("0.0", stamp, "servo_open_angle"),
+            ],
+        )
+    if legacy_pwm_default is not None and legacy_pwm_default["value"] == "2":
+        conn.execute(
+            "UPDATE settings SET value = '0', updated_at = ? WHERE key = 'pwm_chip'",
+            (stamp,),
+        )
 
 def _ensure_batch_events_table(conn: sqlite3.Connection) -> None:
     """Ensure batch_events exists and normalize its event column."""
@@ -653,6 +674,12 @@ def release_calibration_lock(conn: sqlite3.Connection, session_id: str | None = 
         return cur.rowcount > 0
     conn.execute("DELETE FROM calibration_lock WHERE id = 1")
     return True
+
+
+def clear_calibration_lock(conn: sqlite3.Connection) -> bool:
+    """Clear a calibration lock when a new supervisor instance takes ownership."""
+    cur = conn.execute("DELETE FROM calibration_lock WHERE id = 1")
+    return cur.rowcount > 0
 
 
 def get_calibration_lock(conn: sqlite3.Connection) -> dict | None:

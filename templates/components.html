@@ -110,15 +110,15 @@
                     <div class="col-md-6">
                         <div class="btn-group w-100" role="group">
                             <button type="button" class="btn btn-outline-primary" id="btnServoClose">Close Gate
-                                (0°)</button>
+                                (180°)</button>
                             <button type="button" class="btn btn-outline-primary" id="btnServoOpen">Open Gate
-                                (90°)</button>
+                                (0°)</button>
                         </div>
                     </div>
                     <div class="col-md-6">
                         <div class="d-flex align-items-center gap-2">
-                            <label for="sliderServo" class="form-label small text-muted mb-0">Angle:</label>
-                            <input type="range" class="form-range flex-grow-1" min="0" max="90" step="5"
+                            <label for="sliderServo" class="form-label small text-muted mb-0">Angle (0° open, 180° closed):</label>
+                            <input type="range" class="form-range flex-grow-1" min="0" max="180" step="5"
                                 id="sliderServo" value="0">
                             <span class="fw-bold small" id="servoAngleDisplay">0°</span>
                             <button class="btn btn-sm btn-outline-secondary" id="btnSetServoAngle">Set</button>

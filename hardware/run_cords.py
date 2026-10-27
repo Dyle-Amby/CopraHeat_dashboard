@@ -289,6 +289,8 @@ def main(argv: list[str] | None = None) -> None:
                 f"database, last heartbeat {other['age_s']:.0f}s ago. Stop it first; if it "
                 "crashed, its heartbeat goes stale within 10 s."
             )
+        if db.clear_calibration_lock(conn):
+            print("cleared calibration lock from previous supervisor instance")
         interrupted = db.mark_interrupted_batches(conn)
         if interrupted:
             print(f"closed out {interrupted} batch row(s) left unfinished by a previous run")
@@ -540,15 +542,20 @@ def main(argv: list[str] | None = None) -> None:
                             angle = payload_dict.get("angle")
                             state = payload_dict.get("state")
                             if state == "open":
-                                target_angle = float(db.get_setting(conn, "servo_open_angle") or "90.0")
+                                target_angle = float(db.get_setting(conn, "servo_open_angle") or "0.0")
                             elif state == "closed":
-                                target_angle = float(db.get_setting(conn, "servo_closed_angle") or "0.0")
+                                target_angle = float(db.get_setting(conn, "servo_closed_angle") or "180.0")
                             elif angle is not None:
                                 target_angle = float(angle)
                             else:
                                 target_angle = 0.0
                             if io is not None:
-                                io.servo.set_angle(target_angle)
+                                try:
+                                    io.servo.set_angle(target_angle)
+                                except Exception as exc:
+                                    raise RuntimeError(
+                                        f"servo command to {target_angle:.1f}° failed: {exc}"
+                                    ) from exc
                             message = f"Servo set to {target_angle:.1f}°"
 
                         elif row["name"] == "goto_carriage_bin":

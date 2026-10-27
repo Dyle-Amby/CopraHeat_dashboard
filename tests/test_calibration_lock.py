@@ -48,6 +48,15 @@ class TestCalibrationLockDB(unittest.TestCase):
         self.assertFalse(db.is_calibration_locked(self.conn))
         self.assertIsNone(db.get_calibration_lock(self.conn))
 
+    def test_new_supervisor_clears_previous_instance_lock(self):
+        db.acquire_calibration_lock(self.conn, duration_s=600, component="conveyor")
+        self.assertTrue(db.is_calibration_locked(self.conn))
+
+        self.assertTrue(db.clear_calibration_lock(self.conn))
+
+        self.assertFalse(db.is_calibration_locked(self.conn))
+        self.assertFalse(db.clear_calibration_lock(self.conn))
+
 
 class TestValidateCommand(unittest.TestCase):
     def test_string_payloads(self):

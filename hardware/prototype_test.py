@@ -139,12 +139,12 @@ def servo_menu(args: argparse.Namespace, state: dict) -> None:
             return
         print(f"servo on pwmchip{chip} channel {args.pwm_channel} (GPIO18, physical pin 12)")
     servo = state["servo"]
-    print("type an angle 0-180, c = closed (0), o = open (90), Enter = back to menu")
+    print("type an angle 0-180, c = closed (180), o = open (0), Enter = back to menu")
     while True:
         line = input(f"servo [{'--' if servo.angle is None else f'{servo.angle:g}'}]> ").strip().lower()
         if not line:
             return
-        angle = {"c": 0.0, "o": 90.0}.get(line)
+        angle = {"c": 180.0, "o": 0.0}.get(line)
         if angle is None:
             try:
                 angle = float(line)

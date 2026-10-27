@@ -155,7 +155,7 @@ class HardwareHarness:
             self._fan_dev.value = on
         print(f"{stamp()}  [FANS]   {'ON (Relay active)' if on else 'off'}")
 
-    def set_gate(self, open_gate: bool, open_angle: float = 90.0, closed_angle: float = 0.0) -> None:
+    def set_gate(self, open_gate: bool, open_angle: float = 0.0, closed_angle: float = 180.0) -> None:
         self.gate_open = open_gate
         angle = open_angle if open_gate else closed_angle
         if self._servo is not None:
@@ -699,10 +699,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--bins", nargs="+", default=list(carriage.BINS), help="bins bottom to top")
 
     # Hopper servo options
-    p.add_argument("--pwm-chip", type=int, default=2, help="RP1 PWM chip for servo")
+    p.add_argument("--pwm-chip", type=int, default=0, help="RP1 PWM chip for servo")
     p.add_argument("--pwm-channel", type=int, default=2, help="PWM channel for GPIO18")
-    p.add_argument("--open-angle", type=float, default=90.0, help="servo gate open angle")
-    p.add_argument("--closed-angle", type=float, default=0.0, help="servo gate closed angle")
+    p.add_argument("--open-angle", type=float, default=0.0, help="servo gate open angle")
+    p.add_argument("--closed-angle", type=float, default=180.0, help="servo gate closed angle")
 
     # Vision & Camera options
     p.add_argument("--camera", type=int, default=0, help="USB webcam device index (default: 0)")
