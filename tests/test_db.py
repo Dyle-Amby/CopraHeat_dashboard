@@ -50,6 +50,12 @@ class TestSchema(DBCase):
         db.init(self.conn)
         self.assertEqual(db.get_settings(self.conn)["target_kg"], "3.5")
 
+    def test_get_setting_returns_value_or_none(self):
+        db.set_setting(self.conn, "conveyor_hz", 500)
+
+        self.assertEqual(db.get_setting(self.conn, "conveyor_hz"), "500")
+        self.assertIsNone(db.get_setting(self.conn, "unknown_setting"))
+
     def test_init_migrates_legacy_servo_and_pwm_defaults(self):
         db.set_setting(self.conn, "servo_closed_angle", "0.0")
         db.set_setting(self.conn, "servo_open_angle", "90.0")

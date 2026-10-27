@@ -748,6 +748,11 @@ def get_settings(conn: sqlite3.Connection) -> dict[str, str]:
     return {row["key"]: row["value"] for row in conn.execute("SELECT key, value FROM settings")}
 
 
+def get_setting(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row is not None else None
+
+
 def set_setting(conn: sqlite3.Connection, key: str, value) -> None:
     conn.execute(
         """INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
