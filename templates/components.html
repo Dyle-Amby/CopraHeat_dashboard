@@ -524,24 +524,134 @@
 
     <!-- 5. CAMERA TAB -->
     <div class="tab-pane fade" id="tab-camera">
+        <!-- Zone 1: Status -->
         <section class="card mb-3">
             <div class="card-header fw-bold">Status</div>
             <div class="card-body">
                 <div class="row g-3">
-                    <div class="col-md-6">
-                        <span class="text-muted">Webcam</span><br>
+                    <div class="col-md-3">
+                        <span class="text-muted">Webcam Device</span><br>
                         <span id="cam-state" class="badge bg-secondary">—</span>
                     </div>
-                    <div class="col-md-6">
+                    <div class="col-md-3">
+                        <span class="text-muted">Vision Model</span><br>
+                        <span id="cam-model-state" class="badge bg-info text-dark">MobileNetV3</span>
+                    </div>
+                    <div class="col-md-3">
                         <span class="text-muted">Last Capture</span><br>
-                        <span id="cam-last">—</span>
+                        <span id="cam-last" class="fw-bold">—</span>
+                    </div>
+                    <div class="col-md-3">
+                        <span class="text-muted">Inference Latency</span><br>
+                        <span id="cam-latency" class="fw-bold">—</span> <span class="small text-muted">ms</span>
                     </div>
                 </div>
             </div>
         </section>
-        <section class="card mb-3 d-none" id="camera-cal-zone">
-            <div class="card-header">Calibration</div>
-            <div class="card-body"><em>Available in Phase 5.</em></div>
+
+        <!-- Zone 2: Live Preview & Alignment -->
+        <section class="card mb-3 border-info" id="camera-preview-zone">
+            <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                <span class="fw-bold"><i class="bi bi-camera-video me-1"></i> Live Stream &amp; Alignment Preview</span>
+                <div class="btn-group btn-group-sm">
+                    <button class="btn btn-outline-secondary" id="btnToggleCrosshair">
+                        <i class="bi bi-crosshair"></i> Toggle Crosshairs
+                    </button>
+                    <button class="btn btn-outline-primary" id="btnTogglePreview">
+                        <i class="bi bi-play-circle"></i> Start Live Preview
+                    </button>
+                </div>
+            </div>
+            <div class="card-body text-center p-2 bg-dark rounded-bottom position-relative" style="min-height: 380px;">
+                <!-- Crosshair SVG Overlay -->
+                <div id="crosshairOverlay" class="position-absolute top-0 start-0 w-100 h-100 d-none"
+                    style="pointer-events: none; z-index: 10;">
+                    <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
+                        <line x1="50%" y1="0" x2="50%" y2="100%" stroke="rgba(0, 255, 200, 0.7)" stroke-width="1.5"
+                            stroke-dasharray="6,4" />
+                        <line x1="0" y1="50%" x2="100%" y2="50%" stroke="rgba(0, 255, 200, 0.7)" stroke-width="1.5"
+                            stroke-dasharray="6,4" />
+                        <circle cx="50%" cy="50%" r="60" fill="none" stroke="rgba(0, 255, 200, 0.8)"
+                            stroke-width="1.5" />
+                        <circle cx="50%" cy="50%" r="130" fill="none" stroke="rgba(0, 255, 200, 0.5)" stroke-width="1"
+                            stroke-dasharray="4,4" />
+                    </svg>
+                </div>
+
+                <!-- Preview Image Frame -->
+                <img id="cameraPreviewImg" src="/api/camera/preview" class="img-fluid rounded" alt="Camera Preview"
+                    style="max-height: 480px; width: auto; object-fit: contain;">
+
+                <div class="mt-2 text-muted small d-flex justify-content-between px-3 text-light">
+                    <span>Target Resolution: <strong>1920 &times; 1080 (1080p)</strong></span>
+                    <span id="previewFpsStatus">Preview Paused</span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Zone 3: Vision Pipeline Diagnostics -->
+        <section class="card mb-3" id="camera-test-zone">
+            <div class="card-header fw-bold d-flex justify-content-between align-items-center">
+                <span>Vision Pipeline Diagnostics (MobileNetV3)</span>
+                <span class="badge bg-light text-dark">Lock Required</span>
+            </div>
+            <div class="card-body">
+                <div class="row align-items-center mb-3">
+                    <div class="col-md-8">
+                        <p class="small text-muted mb-0">
+                            Captures an instantaneous frame, runs the full preprocessing and classifier inference
+                            pipeline,
+                            and computes the blur Laplacian focus score.
+                        </p>
+                    </div>
+                    <div class="col-md-4 text-end">
+                        <button class="btn btn-primary w-100" id="btnTestVision">
+                            <i class="bi bi-cpu"></i> Test Vision Pipeline
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Diagnostics Output Panel (Populated after test) -->
+                <div class="border rounded p-3 bg-light" id="visionDiagnosticsPanel">
+                    <h6 class="fw-bold mb-3">Latest Pipeline Test Results</h6>
+                    <div class="row g-3 text-center mb-3">
+                        <div class="col-md-3">
+                            <span class="text-muted small">Assigned Grade</span><br>
+                            <span class="fs-4 fw-bold badge bg-secondary mt-1" id="testResultGrade">—</span>
+                        </div>
+                        <div class="col-md-3">
+                            <span class="text-muted small">Confidence</span><br>
+                            <span class="fs-4 fw-bold text-primary mt-1" id="testResultConfidence">—</span>
+                        </div>
+                        <div class="col-md-3">
+                            <span class="text-muted small">Blur Variance (Laplacian)</span><br>
+                            <span class="fs-4 fw-bold" id="testResultBlur">—</span>
+                            <div class="small" id="testResultBlurStatus">—</div>
+                        </div>
+                        <div class="col-md-3">
+                            <span class="text-muted small">Pipeline Latency</span><br>
+                            <span class="fs-4 fw-bold text-dark mt-1" id="testResultLatency">—</span>
+                            <div class="small text-muted">ms total</div>
+                        </div>
+                    </div>
+
+                    <!-- Softmax Probability Breakdown -->
+                    <label class="form-label small text-muted fw-bold mb-1">Softmax Class Probabilities</label>
+                    <div class="progress mb-2" style="height: 22px;">
+                        <div class="progress-bar bg-success" role="progressbar" id="barProbGreat" style="width: 0%"
+                            title="Great">Great: 0%</div>
+                        <div class="progress-bar bg-info text-dark" role="progressbar" id="barProbGood"
+                            style="width: 0%" title="Good">Good: 0%</div>
+                        <div class="progress-bar bg-danger" role="progressbar" id="barProbBad" style="width: 0%"
+                            title="Bad">Bad: 0%</div>
+                    </div>
+                    <div class="d-flex justify-content-between small text-muted">
+                        <span><strong class="text-success">Great:</strong> <span id="probValGreat">—</span></span>
+                        <span><strong class="text-info">Good:</strong> <span id="probValGood">—</span></span>
+                        <span><strong class="text-danger">Bad:</strong> <span id="probValBad">—</span></span>
+                    </div>
+                </div>
+            </div>
         </section>
     </div>
 

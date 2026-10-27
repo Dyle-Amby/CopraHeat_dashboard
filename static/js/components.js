@@ -141,10 +141,43 @@
         const camOk = cam.status === 'ok' || cam.ok === true;
         setBadge('cam-state', camOk);
         setText('cam-last', cam.last_capture_at ? new Date(cam.last_capture_at).toLocaleTimeString() : '—');
+        setText('cam-model-state', cam.model_ready ? 'TFLite Model Active' : 'Fallback / Mock');
 
-        // Calibration Lock Banner
-        const lockBanner = document.getElementById('calLockBanner');
-        if (lockBanner) lockBanner.classList.toggle('d-none', !live.calibration_locked);
+        if (cam.last_test) {
+            const t = cam.last_test;
+            const gradeEl = document.getElementById('testResultGrade');
+            if (gradeEl) {
+                gradeEl.textContent = t.grade.toUpperCase();
+                gradeEl.className = `fs-4 fw-bold badge mt-1 ${t.grade === 'great' ? 'bg-success' : (t.grade === 'good' ? 'bg-info text-dark' : 'bg-danger')}`;
+            }
+            setText('testResultConfidence', (t.confidence * 100).toFixed(1) + '%');
+            setText('testResultBlur', t.blur_laplacian);
+            setText('testResultLatency', t.latency_ms);
+            setText('cam-latency', t.latency_ms);
+
+            const blurStatus = document.getElementById('testResultBlurStatus');
+            if (blurStatus) {
+                const pass = t.blur_laplacian >= t.blur_threshold;
+                blurStatus.textContent = pass ? `✓ Sharp (>= ${t.blur_threshold})` : `✗ Blurry (< ${t.blur_threshold})`;
+                blurStatus.className = `small fw-bold ${pass ? 'text-success' : 'text-danger'}`;
+            }
+
+            const scores = t.scores || {};
+            const pGreat = ((scores.great || 0) * 100).toFixed(1);
+            const pGood = ((scores.good || 0) * 100).toFixed(1);
+            const pBad = ((scores.bad || 0) * 100).toFixed(1);
+
+            const bGreat = document.getElementById('barProbGreat');
+            const bGood = document.getElementById('barProbGood');
+            const bBad = document.getElementById('barProbBad');
+            if (bGreat) { bGreat.style.width = pGreat + '%'; bGreat.textContent = `Great: ${pGreat}%`; }
+            if (bGood) { bGood.style.width = pGood + '%'; bGood.textContent = `Good: ${pGood}%`; }
+            if (bBad) { bBad.style.width = pBad + '%'; bBad.textContent = `Bad: ${pBad}%`; }
+
+            setText('probValGreat', pGreat + '%');
+            setText('probValGood', pGood + '%');
+            setText('probValBad', pBad + '%');
+        }
     }
 
     document.addEventListener('DOMContentLoaded', function () {
@@ -471,6 +504,63 @@
                     return;
                 }
                 api.sendCommand('jog_conveyor', { steps, forward: true });
+            });
+        }
+
+        // --- Camera Live Preview & Alignment ---
+        const btnToggleCrosshair = document.getElementById('btnToggleCrosshair');
+        const crosshairOverlay = document.getElementById('crosshairOverlay');
+        if (btnToggleCrosshair && crosshairOverlay) {
+            btnToggleCrosshair.addEventListener('click', () => {
+                crosshairOverlay.classList.toggle('d-none');
+            });
+        }
+
+        let previewInterval = null;
+        const btnTogglePreview = document.getElementById('btnTogglePreview');
+        const cameraPreviewImg = document.getElementById('cameraPreviewImg');
+        const previewFpsStatus = document.getElementById('previewFpsStatus');
+
+        function refreshPreview() {
+            if (cameraPreviewImg) {
+                cameraPreviewImg.src = `/api/camera/preview?t=${Date.now()}`;
+            }
+        }
+
+        if (btnTogglePreview) {
+            btnTogglePreview.addEventListener('click', () => {
+                if (previewInterval) {
+                    clearInterval(previewInterval);
+                    previewInterval = null;
+                    btnTogglePreview.innerHTML = '<i class="bi bi-play-circle"></i> Start Live Preview';
+                    btnTogglePreview.className = 'btn btn-outline-primary';
+                    if (previewFpsStatus) previewFpsStatus.textContent = 'Preview Paused';
+                } else {
+                    refreshPreview();
+                    previewInterval = setInterval(refreshPreview, 1000);
+                    btnTogglePreview.innerHTML = '<i class="bi bi-pause-circle"></i> Pause Live Preview';
+                    btnTogglePreview.className = 'btn btn-primary';
+                    if (previewFpsStatus) previewFpsStatus.textContent = 'Live (1.0 FPS)';
+                }
+            });
+        }
+
+        // --- Test Vision Pipeline ---
+        const btnTestVision = document.getElementById('btnTestVision');
+        if (btnTestVision) {
+            btnTestVision.addEventListener('click', async () => {
+                btnTestVision.disabled = true;
+                btnTestVision.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Testing...';
+                try {
+                    const res = await api.sendCommand('test_component', { component: 'camera' });
+                    setTimeout(refreshPreview, 500); // refresh the image with the tested frame
+                    if (res && res.result) alert(res.result);
+                } catch (err) {
+                    alert('Camera test failed: ' + err.message);
+                } finally {
+                    btnTestVision.disabled = false;
+                    btnTestVision.innerHTML = '<i class="bi bi-cpu"></i> Test Vision Pipeline';
+                }
             });
         }
     });

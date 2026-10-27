@@ -9,9 +9,12 @@ import json
 import math
 import os
 from datetime import datetime
+from zipfile import Path
 
-from flask import Flask, g, jsonify, render_template, request
-
+from flask import (
+    Flask, g, abort, flash, jsonify, redirect, render_template,
+    request, url_for, send_file, Response, make_response
+)
 from hardware import db
 from hardware.service import get_supervisor_service, CONFIRMATION_PHRASE
 from hardware.batch import COMMAND_NAMES
@@ -245,6 +248,28 @@ def create_app(db_path=None) -> Flask:
         out["calibration_lock"] = lock
         out["settings"] = db.get_settings(conn)
         return jsonify(out)
+
+    @app.get("/api/camera/preview")
+    def api_camera_preview():
+        preview_file = Path(app.root_path) / "tmp" / "camera_preview.jpg"
+        if preview_file.is_file():
+            resp = make_response(send_file(preview_file, mimetype="image/jpeg"))
+            resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            resp.headers["Pragma"] = "no-cache"
+            resp.headers["Expires"] = "0"
+            return resp
+
+        # Return a 200 SVG fallback placeholder when no snapshot exists yet
+        svg = """<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+            <rect width="640" height="360" fill="#212529"/>
+            <text x="50%" y="45%" text-anchor="middle" fill="#adb5bd" font-size="20" font-family="sans-serif">Camera Preview Paused</text>
+            <text x="50%" y="56%" text-anchor="middle" fill="#6c757d" font-size="14" font-family="sans-serif">Click "Test Vision Pipeline" or "Start Live Preview"</text>
+        </svg>"""
+        return Response(svg, mimetype="image/svg+xml", headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        })
 
     @app.get("/api/settings")
     def api_settings():

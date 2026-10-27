@@ -66,3 +66,18 @@ class TestCalibrationCommands(AppCase):
         self.assertEqual(resp.status_code, 202)
         pending = db.pending_commands(self.conn)
         self.assertTrue(any(r["name"] == "set_conveyor_p00" for r in pending))
+
+    def test_camera_preview_route_returns_ok(self):
+        resp = self.client.get("/api/camera/preview")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn(resp.content_type, ["image/jpeg", "image/svg+xml"])
+
+    def test_camera_test_component_with_lock(self):
+        self.client.post("/api/commands", json={"name": "acquire_calibration_lock"})
+        resp = self.client.post("/api/commands", json={
+            "name": "test_component",
+            "payload": {"component": "camera"}
+        })
+        self.assertEqual(resp.status_code, 202)
+        pending = db.pending_commands(self.conn)
+        self.assertTrue(any(r["name"] == "test_component" for r in pending))
