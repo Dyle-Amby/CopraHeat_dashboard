@@ -10,7 +10,7 @@
         calibrationLocked = Boolean(locked);
         const banner = document.getElementById('calLockBanner');
         if (banner) banner.classList.toggle('d-none', !calibrationLocked);
-        setText('btnLockHopperText', calibrationLocked ? 'Release Lock' : 'Acquire Lock');
+        setText('btnCalibrationLockText', calibrationLocked ? 'Release Lock' : 'Acquire Lock');
     }
 
     function setBadge(id, isResponding) {
@@ -324,7 +324,7 @@
             });
         };
 
-        const btnLock = document.getElementById('btnLockHopper');
+        const btnLock = document.getElementById('btnCalibrationLock');
         if (btnLock) btnLock.addEventListener('click', () => toggleLock(btnLock));
 
         // --- Hopper Actions ---
@@ -581,9 +581,10 @@
                 btnTestVision.disabled = true;
                 btnTestVision.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Testing...';
                 try {
-                    const res = await api.sendCommand('test_component', { component: 'camera' });
+                    const res = await sendCommand('test_component', { component: 'camera' });
+                    if (!res.ok) return;
                     setTimeout(refreshPreview, 500); // refresh the image with the tested frame
-                    if (res && res.result) alert(res.result);
+                    if (res.message) alert(res.message);
                 } catch (err) {
                     alert('Camera test failed: ' + err.message);
                 } finally {

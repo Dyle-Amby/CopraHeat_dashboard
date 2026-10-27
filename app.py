@@ -32,9 +32,9 @@ MAINTENANCE_COMMANDS = frozenset({
     "mark_conveyor_stale",
     "goto_carriage_bin",
     "home_carriage",
-    "test_carriage_limits",
     "tare_hopper",
     "calibrate_hopper_scale",
+    "calibrate_bin_scale",
     "set_hopper_servo",
     "test_component",
 })

@@ -62,6 +62,9 @@ class TestPages(AppCase):
         self.assertIn(b"tab-carriage", resp.data)
         self.assertIn(b"tab-chamber", resp.data)
         self.assertIn(b"tab-camera", resp.data)
+        html = resp.get_data(as_text=True)
+        self.assertEqual(html.count('id="btnCalibrationLock"'), 1)
+        self.assertLess(html.index('id="btnCalibrationLock"'), html.index('id="componentTabs"'))
 
 
 class TestLive(AppCase):

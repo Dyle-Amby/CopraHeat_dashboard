@@ -16,6 +16,7 @@ two bench loops (run_climate, run_hopper), which stay for single-subsystem work.
 
 import argparse
 import json
+import math
 import os
 import signal
 import sys
@@ -36,6 +37,20 @@ _FINISHED = (BatchState.COMPLETE, BatchState.ABORTED)
 # the shortest timer the state machine runs on; a simulated tick coarser than
 # this trips alarms that say nothing about the logic
 TIGHTEST_TIMER_S = 5.0
+
+
+def capture_camera_test_frame(webcam, classifier):
+    if webcam is None:
+        raise RuntimeError("camera test failed: camera is not initialized")
+    if classifier is None or not classifier.is_ready:
+        raise RuntimeError("camera test failed: vision model is not loaded")
+    try:
+        ok, frame = webcam.read_frame()
+    except Exception as exc:
+        raise RuntimeError(f"camera capture failed: {exc}") from exc
+    if not ok or frame is None:
+        raise RuntimeError("camera test failed: no frame captured")
+    return frame
 
 
 class SensorCache:
@@ -66,7 +81,7 @@ class SensorCache:
 class Actuators:
     """The only object in the process that touches a pin."""
 
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args: argparse.Namespace, conn=None):
         from gpiozero import OutputDevice
 
         from hardware.hx711 import HX711
@@ -83,10 +98,19 @@ class Actuators:
         self.servo = Servo(channel=args.pwm_channel, chip=args.pwm_chip)
         self.servo.set_angle(self.closed_angle)
         self.hx = HX711(pins.HX711_HOPPER.dout, pins.HX711_HOPPER.sck, scale=args.scale)
+        settings = db.get_settings(conn) if conn is not None else {}
         self.hx_bins = {
-            "great": HX711(pins.HX711_BIN_GREAT.dout, pins.HX711_BIN_GREAT.sck, scale=args.scale),
-            "good":  HX711(pins.HX711_BIN_GOOD.dout,  pins.HX711_BIN_GOOD.sck,  scale=args.scale),
-            "bad":   HX711(pins.HX711_BIN_BAD.dout,   pins.HX711_BIN_BAD.sck,   scale=args.scale),
+            name: HX711(
+                pin.dout,
+                pin.sck,
+                offset=int(settings.get(f"hx711_offset_bin_{name}", "0")),
+                scale=float(settings.get(f"hx711_scale_bin_{name}", str(args.scale or 1.0))),
+            )
+            for name, pin in (
+                ("great", pins.HX711_BIN_GREAT),
+                ("good", pins.HX711_BIN_GOOD),
+                ("bad", pins.HX711_BIN_BAD),
+            )
         }
 
     def read_hopper_kg(self) -> float | None:
@@ -104,6 +128,36 @@ class Actuators:
             return hx.read_kg()
         except Exception:
             return None
+
+    def calibrate_bin_scale(
+        self, conn, target_bin: str, action: str, ref_kg: float = 1.0
+    ) -> str:
+        hx = self.hx_bins.get(target_bin)
+        if hx is None:
+            raise ValueError(f"unknown bin {target_bin!r}")
+
+        if action == "tare":
+            offset = hx.tare(30)
+            if offset is None:
+                raise RuntimeError(f"bin {target_bin} tare failed: no HX711 readings")
+            hx.offset = offset
+            db.set_setting(conn, f"hx711_offset_bin_{target_bin}", offset)
+            return f"Bin {target_bin} tared: {offset}"
+
+        if action == "scale":
+            if not math.isfinite(ref_kg) or ref_kg <= 0:
+                raise ValueError("reference weight must be a positive finite number")
+            raw = hx.read_raw_median(30)
+            if raw is None:
+                raise RuntimeError(f"bin {target_bin} scale calibration failed: no HX711 readings")
+            scale = (raw - hx.offset) / ref_kg
+            if scale == 0:
+                raise RuntimeError(f"bin {target_bin} scale calibration failed: zero scale factor")
+            hx.scale = scale
+            db.set_setting(conn, f"hx711_scale_bin_{target_bin}", f"{scale:.1f}")
+            return f"Bin {target_bin} scale: {scale:.1f} counts/kg"
+
+        raise ValueError(f"unknown bin calibration action {action!r}")
 
     def apply(self, c: Commands) -> None:
         self.heater.value = c.heater_on
@@ -352,7 +406,7 @@ def main(argv: list[str] | None = None) -> None:
         )
         carriage_driver.check_home()
     cache = None if args.simulate else SensorCache()
-    io = None if args.dry_run else Actuators(args)
+    io = None if args.dry_run else Actuators(args, conn)
 
     sim = None
     if args.simulate:
@@ -514,6 +568,8 @@ def main(argv: list[str] | None = None) -> None:
                                 offset = io.hx.tare(30)
                             else:
                                 offset = 84000 if gate_pos == "closed" else 83800
+                            if offset is None:
+                                raise RuntimeError(f"hopper tare ({gate_pos}) failed: no HX711 readings")
                             key = f"hx711_offset_{gate_pos}"
                             db.set_setting(conn, key, str(offset))
                             if io is not None:
@@ -525,10 +581,14 @@ def main(argv: list[str] | None = None) -> None:
                         elif row["name"] == "calibrate_hopper_scale":
                             payload_dict = json.loads(row["payload"]) if row["payload"] else {}
                             ref_kg = float(payload_dict.get("ref_weight_kg", 1.0))
+                            if not math.isfinite(ref_kg) or ref_kg <= 0:
+                                raise ValueError("reference weight must be a positive finite number")
                             offset_closed = int(db.get_setting(conn, "hx711_offset_closed") or "0")
                             if io is not None:
-                                raw = io.hx.read_raw_median(30) or offset_closed
-                                scale = (raw - offset_closed) / ref_kg if ref_kg > 0 else 1.0
+                                raw = io.hx.read_raw_median(30)
+                                if raw is None:
+                                    raise RuntimeError("hopper scale calibration failed: no HX711 readings")
+                                scale = (raw - offset_closed) / ref_kg
                             else:
                                 scale = 21500.0
                             db.set_setting(conn, "hx711_scale", f"{scale:.1f}")
@@ -562,15 +622,21 @@ def main(argv: list[str] | None = None) -> None:
                             payload_dict = json.loads(row["payload"]) if row["payload"] else {}
                             target_bin = payload_dict.get("bin")
                             if carriage_driver:
-                                carriage_driver.goto(target_bin, now=now)
+                                if not carriage_driver.goto(target_bin, now=now):
+                                    raise RuntimeError(
+                                        f"carriage cannot move to {target_bin}: state is {carriage_driver.state}"
+                                    )
                                 message = f"Carriage moving to {target_bin}"
                             else:
                                 message = "No carriage driver active"
 
                         elif row["name"] == "home_carriage":
                             if carriage_driver:
-                                carriage_driver.check_home()
-                                message = f"Carriage homed: currently at {carriage_driver.current_bin}"
+                                if not carriage_driver.goto("bad", now=now):
+                                    raise RuntimeError(
+                                        f"carriage cannot home down: state is {carriage_driver.state}"
+                                    )
+                                message = "Carriage homing down to the bad-bin limit"
                             else:
                                 message = "No carriage driver active"
 
@@ -579,19 +645,9 @@ def main(argv: list[str] | None = None) -> None:
                             target_bin = payload_dict.get("bin", "great")
                             action = payload_dict.get("action", "tare")
                             ref_kg = float(payload_dict.get("ref_kg", 1.0))
-                            if io is not None and target_bin in io.hx_bins:
-                                hx = io.hx_bins[target_bin]
-                                if action == "tare":
-                                    off = hx.tare(30)
-                                    message = f"Bin {target_bin} tared: {off}"
-                                else:
-                                    raw = hx.read_raw_median(30) or 0
-                                    off = getattr(hx, "_offset", 0) or 0
-                                    sc = (raw - off) / ref_kg if ref_kg > 0 else 1.0
-                                    hx.scale = sc
-                                    message = f"Bin {target_bin} scale: {sc:.1f} counts/kg"
-                            else:
-                                message = f"Simulated bin {target_bin} {action} complete"
+                            if io is None:
+                                raise RuntimeError("bin scale calibration requires live hardware")
+                            message = io.calibrate_bin_scale(conn, target_bin, action, ref_kg)
                         elif row["name"] == "jog_conveyor":
                             payload_dict = json.loads(row["payload"]) if row["payload"] else {}
                             steps = int(payload_dict.get("steps", 100))
@@ -670,28 +726,32 @@ def main(argv: list[str] | None = None) -> None:
                                 t0 = time.monotonic()
                                 ok = False
                                 frame = None
-                                if webcam is not None:
+                                mock_vision = args.simulate or args.dry_run
+                                if not mock_vision:
+                                    frame = capture_camera_test_frame(webcam, classifier)
+                                elif webcam is not None:
                                     try:
                                         ok, frame = webcam.read_frame()
                                     except Exception:
                                         ok, frame = False, None
 
-                                # Synthetic frame fallback for mock / headless / simulation
-                                if not ok or frame is None:
+                                if mock_vision and (not ok or frame is None):
                                     try:
                                         import numpy as np
+                                        import cv2
                                         frame = np.zeros((480, 640, 3), dtype=np.uint8)
                                         frame[:] = (35, 40, 45)
-                                        import cv2
                                         cv2.circle(frame, (320, 240), 110, (40, 110, 185), -1)
                                         cv2.circle(frame, (320, 240), 70, (25, 75, 130), -1)
                                         cv2.putText(frame, "SIMULATED COPRA", (190, 245), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                                        ok = True
-                                    except Exception:
-                                        frame = None
+                                    except Exception as exc:
+                                        raise RuntimeError(f"could not create simulated camera frame: {exc}") from exc
 
                                 if classifier is not None and frame is not None:
-                                    top_grade, top_conf, scores = classifier.predict(frame)
+                                    try:
+                                        top_grade, top_conf, scores = classifier.predict(frame)
+                                    except Exception as exc:
+                                        raise RuntimeError(f"vision inference failed: {exc}") from exc
                                 else:
                                     top_grade, top_conf, scores = "great", 0.942, {"bad": 0.015, "good": 0.043, "great": 0.942}
 

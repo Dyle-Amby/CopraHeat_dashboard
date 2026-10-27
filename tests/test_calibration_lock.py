@@ -144,18 +144,37 @@ class TestMaintenanceGate(unittest.TestCase):
 
     def test_calibration_lock_required_for_maintenance(self):
         self._set_live(state="idle", supervisor_pid=1234, heater_on=False)
-        # Without lock
-        res = self.client.post("/api/commands", json={"name": "jog_conveyor", "payload": {"steps": 100}})
-        self.assertEqual(res.status_code, 409)
-        self.assertIn("calibration lock required", res.get_json()["error"])
+        for name, payload in (
+            ("jog_conveyor", {"steps": 100}),
+            ("goto_carriage_bin", {"bin": "great"}),
+            ("calibrate_hopper_scale", {"ref_weight_kg": 1.0}),
+            ("calibrate_bin_scale", {"bin": "great", "action": "tare"}),
+            ("test_component", {"component": "camera"}),
+        ):
+            with self.subTest(name=name):
+                res = self.client.post(
+                    "/api/commands", json={"name": name, "payload": payload}
+                )
+                self.assertEqual(res.status_code, 409)
+                self.assertIn("calibration lock required", res.get_json()["error"])
 
         # Acquire lock
         res_lock = self.client.post("/api/commands", json={"name": "acquire_calibration_lock", "payload": {"duration_s": 60}})
         self.assertEqual(res_lock.status_code, 202)
 
-        # Now jog is allowed
-        res_jog = self.client.post("/api/commands", json={"name": "jog_conveyor", "payload": {"steps": 100}})
-        self.assertEqual(res_jog.status_code, 202)
+        # The single lock covers maintenance commands across component types.
+        for name, payload in (
+            ("jog_conveyor", {"steps": 100}),
+            ("goto_carriage_bin", {"bin": "great"}),
+            ("calibrate_hopper_scale", {"ref_weight_kg": 1.0}),
+            ("calibrate_bin_scale", {"bin": "great", "action": "tare"}),
+            ("test_component", {"component": "camera"}),
+        ):
+            with self.subTest(name=name, locked=True):
+                res = self.client.post(
+                    "/api/commands", json={"name": name, "payload": payload}
+                )
+                self.assertEqual(res.status_code, 202)
 
     def test_start_batch_refused_while_calibration_locked(self):
         self._set_live(state="idle", supervisor_pid=1234, heater_on=False)
