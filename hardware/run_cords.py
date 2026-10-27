@@ -467,6 +467,86 @@ def main(argv: list[str] | None = None) -> None:
                                 db.set_batch_drying_timer(
                                     conn, batch_id, dur_s, controller.drying_timer_deadline
                                 )
+                        elif row["name"] == "tare_hopper":
+                            payload_dict = json.loads(row["payload"]) if row["payload"] else {}
+                            gate_pos = payload_dict.get("gate", "closed")
+                            if io is not None:
+                                offset = io.hx.tare(30)
+                            else:
+                                offset = 84000 if gate_pos == "closed" else 83800
+                            key = f"hx711_offset_{gate_pos}"
+                            db.set_setting(conn, key, str(offset))
+                            if io is not None:
+                                if gate_pos == "closed":
+                                    io.offset_closed = offset
+                                else:
+                                    io.offset_open = offset
+                            message = f"Hopper tare ({gate_pos}) saved: {offset}"
+                        elif row["name"] == "calibrate_hopper_scale":
+                            payload_dict = json.loads(row["payload"]) if row["payload"] else {}
+                            ref_kg = float(payload_dict.get("ref_weight_kg", 1.0))
+                            offset_closed = int(db.get_setting(conn, "hx711_offset_closed") or "0")
+                            if io is not None:
+                                raw = io.hx.read_raw_median(30) or offset_closed
+                                scale = (raw - offset_closed) / ref_kg if ref_kg > 0 else 1.0
+                            else:
+                                scale = 21500.0
+                            db.set_setting(conn, "hx711_scale", f"{scale:.1f}")
+                            if io is not None:
+                                io.scale = scale
+                                io.hx.scale = scale
+                            message = f"Scale calibrated: {scale:.1f} counts/kg (ref: {ref_kg} kg)"
+
+                        elif row["name"] == "set_hopper_servo":
+                            payload_dict = json.loads(row["payload"]) if row["payload"] else {}
+                            angle = payload_dict.get("angle")
+                            state = payload_dict.get("state")
+                            if state == "open":
+                                target_angle = float(db.get_setting(conn, "servo_open_angle") or "90.0")
+                            elif state == "closed":
+                                target_angle = float(db.get_setting(conn, "servo_closed_angle") or "0.0")
+                            elif angle is not None:
+                                target_angle = float(angle)
+                            else:
+                                target_angle = 0.0
+                            if io is not None:
+                                io.servo.set_angle(target_angle)
+                            message = f"Servo set to {target_angle:.1f}°"
+
+                        elif row["name"] == "goto_carriage_bin":
+                            payload_dict = json.loads(row["payload"]) if row["payload"] else {}
+                            target_bin = payload_dict.get("bin")
+                            if carriage_driver:
+                                carriage_driver.goto(target_bin, now=now)
+                                message = f"Carriage moving to {target_bin}"
+                            else:
+                                message = "No carriage driver active"
+
+                        elif row["name"] == "home_carriage":
+                            if carriage_driver:
+                                carriage_driver.check_home()
+                                message = f"Carriage homed: currently at {carriage_driver.current_bin}"
+                            else:
+                                message = "No carriage driver active"
+
+                        elif row["name"] == "calibrate_bin_scale":
+                            payload_dict = json.loads(row["payload"]) if row["payload"] else {}
+                            target_bin = payload_dict.get("bin", "great")
+                            action = payload_dict.get("action", "tare")
+                            ref_kg = float(payload_dict.get("ref_kg", 1.0))
+                            if io is not None and target_bin in io.hx_bins:
+                                hx = io.hx_bins[target_bin]
+                                if action == "tare":
+                                    off = hx.tare(30)
+                                    message = f"Bin {target_bin} tared: {off}"
+                                else:
+                                    raw = hx.read_raw_median(30) or 0
+                                    off = getattr(hx, "_offset", 0) or 0
+                                    sc = (raw - off) / ref_kg if ref_kg > 0 else 1.0
+                                    hx.scale = sc
+                                    message = f"Bin {target_bin} scale: {sc:.1f} counts/kg"
+                            else:
+                                message = f"Simulated bin {target_bin} {action} complete"
                         else:
                             message = apply_command(controller, row["name"], row["payload"])
                         db.resolve_command(conn, row["id"], db.DONE, message)

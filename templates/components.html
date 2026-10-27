@@ -47,13 +47,86 @@
                 </div>
             </div>
         </section>
-        <section class="card mb-3 d-none" id="hopper-cal-zone">
-            <div class="card-header">Calibration</div>
-            <div class="card-body"><em>Available in Phase 3.</em></div>
+        <!-- Zone 2: Hopper Calibration -->
+        <section class="card mb-3" id="hopper-cal-zone">
+            <div class="card-header fw-bold d-flex justify-content-between align-items-center">
+                <span>Hopper Load Cell Calibration</span>
+                <button class="btn btn-sm btn-outline-warning" id="btnLockHopper">
+                    <i class="bi bi-lock"></i> <span id="btnLockHopperText">Acquire Lock</span>
+                </button>
+            </div>
+            <div class="card-body">
+                <p class="text-muted small">
+                    The hopper load cell zero shifts when the gate opens. Calibrate tare with the gate closed, tare with
+                    the gate open, and scale with a known reference mass.
+                </p>
+
+                <div class="row g-3">
+                    <!-- Step 1: Tare Closed -->
+                    <div class="col-md-4">
+                        <div class="border rounded p-3 h-100">
+                            <h6>1. Tare Gate Closed</h6>
+                            <p class="small text-muted">Ensure hopper is empty and gate is closed.</p>
+                            <button class="btn btn-primary btn-sm w-100" id="btnTareClosed">Tare Closed</button>
+                            <div class="mt-2 small text-muted">Offset (closed): <strong id="valOffsetClosed">—</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step 2: Reference Weight -->
+                    <div class="col-md-4">
+                        <div class="border rounded p-3 h-100">
+                            <h6>2. Calibrate Scale</h6>
+                            <p class="small text-muted">Place known reference weight on the closed gate.</p>
+                            <div class="input-group input-group-sm mb-2">
+                                <input type="number" step="0.01" class="form-control" id="inputRefWeight"
+                                    placeholder="e.g. 1.0" value="1.0">
+                                <span class="input-group-text">kg</span>
+                            </div>
+                            <button class="btn btn-primary btn-sm w-100" id="btnCalScale">Calculate Scale</button>
+                            <div class="mt-2 small text-muted">Scale factor: <strong id="valScaleFactor">—</strong>
+                                counts/kg</div>
+                        </div>
+                    </div>
+
+                    <!-- Step 3: Tare Open -->
+                    <div class="col-md-4">
+                        <div class="border rounded p-3 h-100">
+                            <h6>3. Tare Gate Open</h6>
+                            <p class="small text-muted">Remove weight. Opens gate and zeroes the offset.</p>
+                            <button class="btn btn-primary btn-sm w-100" id="btnTareOpen">Tare Open</button>
+                            <div class="mt-2 small text-muted">Offset (open): <strong id="valOffsetOpen">—</strong>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </section>
-        <section class="card mb-3 d-none" id="hopper-test-zone">
-            <div class="card-header">Manual Tests</div>
-            <div class="card-body"><em>Available in Phase 3.</em></div>
+
+        <!-- Zone 3: Hopper Manual Tests -->
+        <section class="card mb-3" id="hopper-test-zone">
+            <div class="card-header fw-bold">Manual Gate Test</div>
+            <div class="card-body">
+                <div class="row align-items-center g-3">
+                    <div class="col-md-6">
+                        <div class="btn-group w-100" role="group">
+                            <button type="button" class="btn btn-outline-primary" id="btnServoClose">Close Gate
+                                (0°)</button>
+                            <button type="button" class="btn btn-outline-primary" id="btnServoOpen">Open Gate
+                                (90°)</button>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="d-flex align-items-center gap-2">
+                            <label for="sliderServo" class="form-label small text-muted mb-0">Angle:</label>
+                            <input type="range" class="form-range flex-grow-1" min="0" max="90" step="5"
+                                id="sliderServo" value="0">
+                            <span class="fw-bold small" id="servoAngleDisplay">0°</span>
+                            <button class="btn btn-sm btn-outline-secondary" id="btnSetServoAngle">Set</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </section>
     </div>
 
@@ -81,13 +154,47 @@
                 </div>
             </div>
         </section>
-        <section class="card mb-3 d-none" id="conveyor-cal-zone">
-            <div class="card-header">Calibration</div>
-            <div class="card-body"><em>Available in Phase 4.</em></div>
-        </section>
-        <section class="card mb-3 d-none" id="conveyor-test-zone">
-            <div class="card-header">Manual Tests</div>
-            <div class="card-body"><em>Available in Phase 4.</em></div>
+        <!-- Zone 2: Carriage Calibration -->
+        <section class="card mb-3" id="carriage-cal-zone">
+            <div class="card-header fw-bold">Bin Scale Calibration (HX711)</div>
+            <div class="card-body">
+                <p class="small text-muted">Tare and calibrate individual collection bin load cells.</p>
+                <div class="row g-3">
+                    <div class="col-md-4">
+                        <div class="border rounded p-3 text-center">
+                            <h6>Great Bin</h6>
+                            <button class="btn btn-sm btn-outline-primary w-100 mb-2" id="btnTareBinGreat">Tare
+                                Empty</button>
+                            <div class="input-group input-group-sm mb-2">
+                                <input type="number" step="0.01" class="form-control" id="refKgGreat" value="1.0">
+                                <button class="btn btn-primary" id="btnCalBinGreat">Calibrate</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="border rounded p-3 text-center">
+                            <h6>Good Bin</h6>
+                            <button class="btn btn-sm btn-outline-primary w-100 mb-2" id="btnTareBinGood">Tare
+                                Empty</button>
+                            <div class="input-group input-group-sm mb-2">
+                                <input type="number" step="0.01" class="form-control" id="refKgGood" value="1.0">
+                                <button class="btn btn-primary" id="btnCalBinGood">Calibrate</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="border rounded p-3 text-center">
+                            <h6>Bad Bin</h6>
+                            <button class="btn btn-sm btn-outline-primary w-100 mb-2" id="btnTareBinBad">Tare
+                                Empty</button>
+                            <div class="input-group input-group-sm mb-2">
+                                <input type="number" step="0.01" class="form-control" id="refKgBad" value="1.0">
+                                <button class="btn btn-primary" id="btnCalBinBad">Calibrate</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </section>
     </div>
 
@@ -143,13 +250,25 @@
                 </div>
             </div>
         </section>
-        <section class="card mb-3 d-none" id="carriage-cal-zone">
-            <div class="card-header">Calibration</div>
-            <div class="card-body"><em>Available in Phase 3.</em></div>
-        </section>
-        <section class="card mb-3 d-none" id="carriage-test-zone">
-            <div class="card-header">Manual Tests</div>
-            <div class="card-body"><em>Available in Phase 3.</em></div>
+        <section class="card mb-3" id="carriage-test-zone">
+            <div class="card-header fw-bold">Manual Positioning &amp; Limit Switch Diagnostics</div>
+            <div class="card-body">
+                <h6>Move Carriage to Bin</h6>
+                <div class="btn-group mb-3" role="group">
+                    <button type="button" class="btn btn-outline-primary" id="btnCallGreat">Great (Top / LS1)</button>
+                    <button type="button" class="btn btn-outline-primary" id="btnCallGood">Good (Mid / LS2)</button>
+                    <button type="button" class="btn btn-outline-primary" id="btnCallBad">Bad (Bottom / LS3)</button>
+                    <button type="button" class="btn btn-outline-secondary" id="btnHomeCarriage"><i
+                            class="bi bi-house"></i> Home Down</button>
+                </div>
+
+                <div class="alert alert-info py-2 small mb-0">
+                    <i class="bi bi-info-circle"></i> <strong>Switch Test Mode</strong>:
+                    Press each limit switch on the physical rail by hand <em>without moving the carriage</em>.
+                    The indicators in the Status section above will flash <span class="badge bg-success">Pressed</span>
+                    in real-time.
+                </div>
+            </div>
         </section>
     </div>
 

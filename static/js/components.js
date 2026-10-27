@@ -1,4 +1,3 @@
-// components.js — Phase 2 (Status only)
 (function () {
     function setText(id, val) {
         const el = document.getElementById(id);
@@ -113,7 +112,7 @@
         const camOk = cam.status === 'ok' || cam.ok === true;
         setBadge('cam-state', camOk);
         setText('cam-last', cam.last_capture_at ? new
-        Date(cam.last_capture_at).toLocaleTimeString() : '—');
+            Date(cam.last_capture_at).toLocaleTimeString() : '—');
 
         // Calibration Lock Banner
         const lockBanner = document.getElementById('calLockBanner');
@@ -124,5 +123,87 @@
         if (window.CORDS && typeof window.CORDS.startLivePolling === 'function') {
             window.CORDS.startLivePolling(render);
         }
+    });
+
+    // Calibration and manual component controls
+    async function toggleLock() {
+        const banner = document.getElementById('calLockBanner');
+        const isLocked = banner && !banner.classList.contains('d-none');
+        const cmd = isLocked ? 'release_calibration_lock' : 'acquire_calibration_lock';
+        const payload = isLocked ? {} : { duration_s: 600, component: 'hopper' };
+        try {
+            await window.CORDS.sendCommand(cmd, payload);
+        } catch (err) {
+            alert('Lock request failed: ' + err.message);
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', function () {
+        const api = window.CORDS;
+        if (!api || typeof api.sendCommand !== 'function') return;
+
+        const bindCommand = (id, command, payload) => {
+            const button = document.getElementById(id);
+            if (button) button.addEventListener('click', () => api.sendCommand(command, payload));
+        };
+
+        const btnLockHopper = document.getElementById('btnLockHopper');
+        if (btnLockHopper) btnLockHopper.addEventListener('click', toggleLock);
+
+        const bindAsync = (id, action, successMessage) => {
+            const button = document.getElementById(id);
+            if (!button) return;
+            button.addEventListener('click', async () => {
+                button.disabled = true;
+                try {
+                    const res = await action();
+                    alert(res?.result || successMessage);
+                } catch (err) {
+                    alert(err.message);
+                } finally {
+                    button.disabled = false;
+                }
+            });
+        };
+
+        bindAsync('btnTareClosed', () => api.sendCommand('tare_hopper', { gate: 'closed' }), 'Tare completed');
+        bindAsync('btnCalScale', () => {
+            const kg = parseFloat(document.getElementById('inputRefWeight')?.value) || 1.0;
+            return api.sendCommand('calibrate_hopper_scale', { ref_weight_kg: kg });
+        }, 'Scale calibrated');
+        bindAsync('btnTareOpen', () => api.sendCommand('tare_hopper', { gate: 'open' }), 'Tare open completed');
+
+        bindCommand('btnServoClose', 'set_hopper_servo', { state: 'closed' });
+        bindCommand('btnServoOpen', 'set_hopper_servo', { state: 'open' });
+        const sliderServo = document.getElementById('sliderServo');
+        const servoAngleDisplay = document.getElementById('servoAngleDisplay');
+        if (sliderServo && servoAngleDisplay) {
+            sliderServo.addEventListener('input', event => {
+                servoAngleDisplay.textContent = event.target.value + '°';
+            });
+        }
+        const btnSetServoAngle = document.getElementById('btnSetServoAngle');
+        if (btnSetServoAngle && sliderServo) {
+            btnSetServoAngle.addEventListener('click', () =>
+                api.sendCommand('set_hopper_servo', { angle: parseFloat(sliderServo.value) }));
+        }
+
+        bindCommand('btnCallGreat', 'goto_carriage_bin', { bin: 'great' });
+        bindCommand('btnCallGood', 'goto_carriage_bin', { bin: 'good' });
+        bindCommand('btnCallBad', 'goto_carriage_bin', { bin: 'bad' });
+        bindCommand('btnHomeCarriage', 'home_carriage', {});
+
+        ['great', 'good', 'bad'].forEach(bin => {
+            const cap = bin.charAt(0).toUpperCase() + bin.slice(1);
+            bindCommand(`btnTareBin${cap}`, 'calibrate_bin_scale', { bin, action: 'tare' });
+            const calButton = document.getElementById(`btnCalBin${cap}`);
+            const refInput = document.getElementById(`refKg${cap}`);
+            if (calButton && refInput) {
+                calButton.addEventListener('click', () => {
+                    const kg = parseFloat(refInput.value) || 1.0;
+                    api.sendCommand('calibrate_bin_scale', { bin, action: 'scale', ref_kg: kg });
+                });
+            }
+        });
     });
 })();
