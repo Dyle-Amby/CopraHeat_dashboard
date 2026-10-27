@@ -36,7 +36,7 @@ class TestBatchMilestonesAndRecovery(AppCase):
             "message": "Unclean shutdown detected during DRYING. Recover or abort?",
             "options": ["recover", "abort"]
         }
-        self.supervisor_up("idle", active_prompt=prompt)
+        self.supervisor_up("idle", active_prompt=prompt) 
 
         # 3. Check /api/live contains active_prompt
         resp = self.client.get("/api/live")
