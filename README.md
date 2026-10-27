@@ -9,10 +9,10 @@
 
 CopraHeat Dashboard is a Flask-based web application that serves as the operator interface for an automated copra (dried coconut) processing system. It provides real-time monitoring of drying chamber conditions, sensor data visualization, batch history records, and manual override controls — all accessible from any device on the local network via a Raspberry Pi host.
 
-The system tracks the full copra processing pipeline:
+The system tracks the full copra processing pipeline, while also recording milestone events for each batch and surfacing operator prompts when a run needs recovery or confirmation.
 
 ```
-Intake → Drying (closed-loop, static tray) → Sorting (vision-based grading)
+Intake → Drying (closed-loop, static tray) → Sorting (vision-based grading) → Review / recovery
 ```
 
 ---
@@ -21,12 +21,13 @@ Intake → Drying (closed-loop, static tray) → Sorting (vision-based grading)
 
 | Page | Description |
 |---|---|
-| **Dashboard** | Live overview polled every 2 s — phase track, heater/fan state, chamber and exhaust readings, exhaust absolute humidity (the drying endpoint signal), hopper weight vs. target, batch vision grade consensus & sample frame counts, and active alarms |
+| **Dashboard** | Live overview polled every 2 s — phase track, heater/fan state, chamber and exhaust readings, exhaust absolute humidity (the drying endpoint signal), hopper weight vs. target, batch vision grade consensus & sample frame counts, active alarms, and any blocking prompt from the machine |
 | **Sensor Logs** | Per-batch time-series charts for chamber temperature, exhaust temperature, exhaust RH, exhaust absolute humidity and hopper weight, with peak / average / lowest; a running batch refreshes itself |
 | **Batch History** | Every batch with start time, total and drying time, weight in / out, post-sort weight loss, unified batch grade (`great`, `good`, `bad`, legacy, or review flag) with full sample frame breakdown tooltips; CSV export |
-| **Control Panel** | Operator commands — start, end drying (manual endpoint), manual bin assignment / review override (`great`, `good`, `bad`), finish sorting, reset, abort with a reason, and target batch weight. Disabled when supervisor is offline |
+| **Control Panel** | Operator commands — start, end drying (manual endpoint), manual bin assignment / review override (`great`, `good`, `bad`), finish sorting, reset, abort with a reason, target batch weight, and prompt responses such as recover vs. abort after an unclean shutdown |
+| **Components** | Maintenance and calibration page for calibration locks, conveyor jogs, carriage homing, hopper tare / scale calibration, servo checks, and component-level troubleshooting |
 
-Every page header shows the supervisor heartbeat (online / stopped / not responding), and readings from a supervisor that is not running are dimmed as last-known values.
+Every page header shows the supervisor heartbeat (online / stopped / not responding), and readings from a supervisor that is not running are dimmed as last-known values. Batch milestone events and active prompts are surfaced in the live API so the frontend can display recovery flows without polling ad hoc tables.
 
 ---
 
@@ -55,7 +56,7 @@ CopraHeat_dashboard/
 │   ├── __init__.py
 │   ├── pins.py             # GPIO pin map — single source of truth (BCM numbering)
 │   ├── states.py           # BatchState / ConveyorCommand — shared vocabulary
-│   ├── batch.py            # Batch state machine: Intake → Drying → Sorting (no GPIO; unit-tested)
+│   ├── batch.py            # Batch state machine: Intake → Drying → Sorting + active prompt handling
 │   ├── grading.py          # Batch-level ensemble sampling, soft-voting, visual contamination guard
 │   ├── climate.py          # Heater hysteresis + fan interlock logic (no GPIO; unit-tested)
 │   ├── hopper.py           # Hopper gate state machine + stable-weight filter (no GPIO; unit-tested)
@@ -86,13 +87,15 @@ CopraHeat_dashboard/
 │       ├── dashboard.js    # Dashboard page (live overview & grade badge)
 │       ├── sensor_logs.js  # Sensor Logs chart
 │       ├── batch_history.js# CSV export
-│       └── control_panel.js# Operator commands & manual grade assignment
+│       ├── control_panel.js# Operator commands & manual grade assignment
+│       └── components.js   # Maintenance/calibration controls and live status widgets
 └── templates/
     ├── base.html           # Shared layout (sidebar nav, header, CDN links)
     ├── dashboard.html      # Live batch overview
     ├── sensor_logs.html    # Sensor time-series charts
     ├── batch_history.html  # Batch records table (with legacy & review indicators)
-    └── control_panel.html  # Operator commands
+    ├── control_panel.html  # Operator commands
+    └── components.html     # Calibration, bench checks, and machine health tools
 ```
 
 ---
@@ -199,17 +202,21 @@ The server binds to `0.0.0.0:5000`, making the dashboard reachable from any devi
 | `/sensor-logs` | `sensor_logs()` | Sensor Logs |
 | `/batch-history` | `batch_history()` | Batch History |
 | `/control-panel` | `control_panel()` | Control Panel |
+| `/components` | `components()` | Components / maintenance |
 
 **JSON API** (what the pages poll; usable from any client on the LAN)
 
 | Method & route | Returns |
 |---|---|
-| `GET /api/live` | Machine snapshot + `supervisor` (`running` / `stopped` / `not_responding` / `never_run`) + the current `batch` row |
+| `GET /api/live` | Machine snapshot + `supervisor` (`running` / `stopped` / `not_responding` / `never_run`), current `batch`, active prompt, and a `batch_events` list for the active batch |
 | `GET /api/batches?limit=N` | Recent batches, newest first |
 | `GET /api/batches/<id>` | One batch |
 | `GET /api/batches/<id>/samples?after=<sample id>` | Its `sensor_log` rows; `after` returns only newer ones |
+| `GET /api/batches/<id>/events` | Timestamped milestone events such as start, drying transitions, gate commands, and recovery actions |
 | `POST /api/commands` `{"name", "payload"}` | `202` + the queued command. `400` for a bad name or payload, `409` if the supervisor is not running |
 | `GET /api/commands/<id>` | `pending`, then `done` / `rejected` with the machine's message |
+
+The active prompt system allows a supervisor to ask the dashboard to respond to blocking decisions (for example, recover vs. abort after an unclean shutdown or confirm a timed-out drying cycle). These prompts are serialized in `machine_state.active_prompt` and exposed through `/api/live` as JSON.
 
 ---
 
@@ -219,10 +226,11 @@ All state lives in a SQLite database (`cords.db`, created on first run, git-igno
 
 | Table | Written by | Purpose |
 |---|---|---|
-| `machine_state` | supervisor | Single-row live snapshot, including a heartbeat so the UI can tell live data from a dead process |
+| `machine_state` | supervisor | Single-row live snapshot, including a heartbeat so the UI can tell live data from a dead process plus the current `active_prompt` payload |
 | `sensor_log` | supervisor | Time series behind the Sensor Logs charts |
 | `batches` | supervisor | One row per batch — inserted at start, updated with v3 batch-level grade consensus, operator override, review flags, sample vectors, and configuration snapshot |
-| `commands` | Flask | Operator queue (`start`, `end_drying`, `override_grade`, `finish_sorting`, `abort`, `reset`, `set_target_kg`) with per-command results |
+| `batch_events` | supervisor | Timestamped process milestones (`batch_started`, `drying_started`, `gate_opened`, recovery / abort decisions, etc.) that keep a searchable event trail for each batch |
+| `commands` | Flask | Operator queue (`start`, `end_drying`, `override_grade`, `finish_sorting`, `abort`, `reset`, `set_target_kg`, `answer_prompt`, `clear_prompt`) with per-command results |
 | `settings` | supervisor | Calibration parameters (HX711 scale/offsets, servo angles, vision grading thresholds, belt travel steps) |
 | `calibration_lock` | Flask / supervisor | Exclusivity lock preventing batch starts during maintenance/calibration sessions |
 
