@@ -4,11 +4,10 @@
 
 {% block content %}
 
-<!-- Calibration lock banner (hidden until JS detects a lock) -->
+<!-- Calibration lock banner (shown while a calibration lock is active) -->
 <div id="calLockBanner" class="alert alert-warning d-none mb-3" role="alert">
     <i class="bi bi-lock-fill"></i>
-    <strong>Calibration in progress</strong> — another session holds the calibration
-    lock.
+    <strong>Calibration in progress</strong> — the calibration lock is active.
 </div>
 
 <!-- Tab navigation -->

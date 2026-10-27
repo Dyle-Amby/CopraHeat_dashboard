@@ -1,7 +1,16 @@
 (function () {
+    let calibrationLocked = false;
+
     function setText(id, val) {
         const el = document.getElementById(id);
         if (el) el.textContent = val ?? '—';
+    }
+
+    function updateCalibrationLockUI(locked) {
+        calibrationLocked = Boolean(locked);
+        const banner = document.getElementById('calLockBanner');
+        if (banner) banner.classList.toggle('d-none', !calibrationLocked);
+        setText('btnLockHopperText', calibrationLocked ? 'Release Lock' : 'Acquire Lock');
     }
 
     function setBadge(id, isResponding) {
@@ -38,6 +47,8 @@
     };
 
     function render(live) {
+        updateCalibrationLockUI(live.calibration_locked);
+
         const sup = live.supervisor ?? 'stopped';
         const dim = (sup !== 'running');
         const container = document.getElementById('componentTabContent');
@@ -187,15 +198,21 @@
     });
 
     // Calibration Lock Toggle
-    async function toggleLock() {
-        const banner = document.getElementById('calLockBanner');
-        const isLocked = banner && !banner.classList.contains('d-none');
-        const cmd = isLocked ? 'release_calibration_lock' : 'acquire_calibration_lock';
-        const payload = isLocked ? {} : { duration_s: 600, component: 'conveyor' };
+    async function toggleLock(button) {
+        const cmd = calibrationLocked ? 'release_calibration_lock' : 'acquire_calibration_lock';
+        const payload = calibrationLocked ? {} : { duration_s: 600, component: 'conveyor' };
+        button.disabled = true;
         try {
-            await window.CORDS.sendCommand(cmd, payload);
+            const result = await window.CORDS.sendCommand(cmd, payload);
+            if (!result.ok) {
+                alert(`Calibration lock failed: ${result.message || 'request rejected'}`);
+                return;
+            }
+            updateCalibrationLockUI(!calibrationLocked);
         } catch (err) {
             alert('Lock request failed: ' + err.message);
+        } finally {
+            button.disabled = false;
         }
     }
 
@@ -275,9 +292,20 @@
         const api = window.CORDS;
         if (!api || typeof api.sendCommand !== 'function') return;
 
+        const sendCommand = async (command, payload) => {
+            try {
+                const result = await api.sendCommand(command, payload);
+                if (!result.ok) alert(`${command} failed: ${result.message || 'request rejected'}`);
+                return result;
+            } catch (err) {
+                alert(`${command} failed: ${err.message}`);
+                return { ok: false, message: err.message };
+            }
+        };
+
         const bindCommand = (id, command, payload) => {
             const button = document.getElementById(id);
-            if (button) button.addEventListener('click', () => api.sendCommand(command, payload));
+            if (button) button.addEventListener('click', () => sendCommand(command, payload));
         };
 
         const bindAsync = (id, action, successMessage) => {
@@ -287,7 +315,7 @@
                 button.disabled = true;
                 try {
                     const res = await action();
-                    alert(res?.result || successMessage);
+                    if (res?.ok) alert(res.message || successMessage);
                 } catch (err) {
                     alert(err.message);
                 } finally {
@@ -297,15 +325,15 @@
         };
 
         const btnLock = document.getElementById('btnLockHopper');
-        if (btnLock) btnLock.addEventListener('click', toggleLock);
+        if (btnLock) btnLock.addEventListener('click', () => toggleLock(btnLock));
 
         // --- Hopper Actions ---
-        bindAsync('btnTareClosed', () => api.sendCommand('tare_hopper', { gate: 'closed' }), 'Tare completed');
+        bindAsync('btnTareClosed', () => sendCommand('tare_hopper', { gate: 'closed' }), 'Tare completed');
         bindAsync('btnCalScale', () => {
             const kg = parseFloat(document.getElementById('inputRefWeight')?.value) || 1.0;
-            return api.sendCommand('calibrate_hopper_scale', { ref_weight_kg: kg });
+            return sendCommand('calibrate_hopper_scale', { ref_weight_kg: kg });
         }, 'Scale calibrated');
-        bindAsync('btnTareOpen', () => api.sendCommand('tare_hopper', { gate: 'open' }), 'Tare open completed');
+        bindAsync('btnTareOpen', () => sendCommand('tare_hopper', { gate: 'open' }), 'Tare open completed');
 
         bindCommand('btnServoClose', 'set_hopper_servo', { state: 'closed' });
         bindCommand('btnServoOpen', 'set_hopper_servo', { state: 'open' });
@@ -319,7 +347,7 @@
         const btnSetServoAngle = document.getElementById('btnSetServoAngle');
         if (btnSetServoAngle && sliderServo) {
             btnSetServoAngle.addEventListener('click', () =>
-                api.sendCommand('set_hopper_servo', { angle: parseFloat(sliderServo.value) }));
+                sendCommand('set_hopper_servo', { angle: parseFloat(sliderServo.value) }));
         }
 
         // --- Carriage Actions ---
@@ -336,7 +364,7 @@
             if (calButton && refInput) {
                 calButton.addEventListener('click', () => {
                     const kg = parseFloat(refInput.value) || 1.0;
-                    api.sendCommand('calibrate_bin_scale', { bin, action: 'scale', ref_kg: kg });
+                        sendCommand('calibrate_bin_scale', { bin, action: 'scale', ref_kg: kg });
                 });
             }
         });
@@ -345,7 +373,7 @@
         document.querySelectorAll('[data-jog]').forEach(btn => {
             btn.addEventListener('click', () => {
                 const steps = parseInt(btn.dataset.jog, 10);
-                api.sendCommand('jog_conveyor', { steps: Math.abs(steps), forward: steps > 0 });
+                sendCommand('jog_conveyor', { steps: Math.abs(steps), forward: steps > 0 });
             });
         });
 
@@ -355,13 +383,13 @@
         if (btnCustomJogFwd && inputCustomJog) {
             btnCustomJogFwd.addEventListener('click', () => {
                 const s = Math.abs(parseInt(inputCustomJog.value, 10) || 500);
-                api.sendCommand('jog_conveyor', { steps: s, forward: true });
+                sendCommand('jog_conveyor', { steps: s, forward: true });
             });
         }
         if (btnCustomJogRev && inputCustomJog) {
             btnCustomJogRev.addEventListener('click', () => {
                 const s = Math.abs(parseInt(inputCustomJog.value, 10) || 500);
-                api.sendCommand('jog_conveyor', { steps: s, forward: false });
+                sendCommand('jog_conveyor', { steps: s, forward: false });
             });
         }
 
@@ -375,14 +403,14 @@
             btnSaveDriver.addEventListener('click', () => {
                 const p00 = parseInt(document.getElementById('inputP00')?.value, 10) || 10000;
                 const hz = parseFloat(document.getElementById('inputConveyorHz')?.value) || 400.0;
-                api.sendCommand('set_conveyor_p00', { p00, hz });
+                sendCommand('set_conveyor_p00', { p00, hz });
             });
         }
 
         const btnAckFresh = document.getElementById('btnAcknowledgeFresh');
         if (btnAckFresh) {
             btnAckFresh.addEventListener('click', () => {
-                api.sendCommand('mark_conveyor_stale', { stale: false });
+                sendCommand('mark_conveyor_stale', { stale: false });
             });
         }
 
@@ -448,7 +476,7 @@
                     alert('Conveyor is already at or behind start position.');
                     return;
                 }
-                api.sendCommand('jog_conveyor', { steps: delta, forward: false });
+                sendCommand('jog_conveyor', { steps: delta, forward: false });
             });
         }
 
@@ -473,7 +501,7 @@
 
                 btnSaveLeg.disabled = true;
                 try {
-                    await api.sendCommand('save_conveyor_leg', {
+                    const result = await sendCommand('save_conveyor_leg', {
                         leg: wizardState.currentLeg,
                         steps: mean,
                         meta: {
@@ -485,6 +513,7 @@
                             saved_at: new Date().toISOString()
                         }
                     });
+                    if (!result.ok) return;
                     alert(`Saved ${wizardState.currentLeg}: ${mean} steps!`);
                 } catch (err) {
                     alert('Save failed: ' + err.message);
@@ -503,7 +532,7 @@
                     alert('No valid trial mean available. Record trials first!');
                     return;
                 }
-                api.sendCommand('jog_conveyor', { steps, forward: true });
+                sendCommand('jog_conveyor', { steps, forward: true });
             });
         }
 
