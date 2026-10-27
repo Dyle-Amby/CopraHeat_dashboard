@@ -22,6 +22,7 @@ import signal
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 from hardware import db, pins, sensors
 from hardware.batch import BatchController, Commands, Inputs, apply_command

@@ -1,4 +1,5 @@
 import tempfile
+import typing
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -75,6 +76,9 @@ class ActuatorCalibrationTests(unittest.TestCase):
 
 
 class CameraTestReadinessTests(unittest.TestCase):
+    def test_preview_helper_annotations_resolve_at_import(self):
+        self.assertIs(typing.get_type_hints(save_camera_preview)["preview_path"], Path)
+
     def test_preview_capture_does_not_require_classifier(self):
         frame = object()
         camera = SimpleNamespace(read_frame=lambda: (True, frame))
