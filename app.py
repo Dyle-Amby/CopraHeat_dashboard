@@ -247,6 +247,8 @@ def create_app(db_path=None) -> Flask:
         out["calibration_locked"] = lock is not None
         out["calibration_lock"] = lock
         out["settings"] = db.get_settings(conn)
+        # Expose active batch milestone updates to frontend
+        out ["batch_events"] = db.get_batch_events(conn, batch_id) if batch_id is not None else []
         return jsonify(out)
 
     @app.get("/api/camera/preview")
@@ -295,6 +297,12 @@ def create_app(db_path=None) -> Flask:
         after = request.args.get("after", type=int)
         return jsonify(db.batch_samples(conn, batch_id, after_id=after))
 
+    @app.get("/api/batches/<int:batch_id>/events")
+    def api_batch_events(batch_id):
+        conn = get_conn()
+        if db.get_batch(conn, batch_id) is None:
+            return json_error(404, f"no batch #{batch_id}")
+        return jsonify(db.get_batch_events(conn, batch_id))
     # --- commands ----------------------------------------------------------
 
     @app.post("/api/commands")

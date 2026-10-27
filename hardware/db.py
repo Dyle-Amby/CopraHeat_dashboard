@@ -164,6 +164,16 @@ CREATE TABLE IF NOT EXISTS commands (
 );
 CREATE INDEX IF NOT EXISTS idx_commands_pending ON commands(status, id);
 
+CREATE TABLE IF NOT EXISTS batch_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id    INTEGER REFERENCES batches(id),
+    ts          TEXT    NOT NULL,
+    event_type  TEXT    NOT NULL,
+    details     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_batch_events_batch ON batch_events(batch_id, id);
+
 CREATE TABLE IF NOT EXISTS machine_state (
     id             INTEGER PRIMARY KEY CHECK (id = 1),
     updated_at     TEXT    NOT NULL,
@@ -346,12 +356,31 @@ def init(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     _ensure_fan_reason_columns(conn)
     _ensure_prompt_and_timer_columns(conn)
+    _ensure_batch_events_table(conn)
     conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     stamp = now_iso()
     conn.executemany(
         "INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)",
         [(k, v, stamp) for k, v in DEFAULT_SETTINGS.items()],
     )
+
+def _ensure_batch_events_table(conn: sqlite3.Connection) -> None:
+    """Ensure batch_events exists and normalize its event column."""
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS batch_events (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        batch_id   INTEGER REFERENCES batches(id),
+        ts         TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        details    TEXT
+    );
+    """)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(batch_events)")}
+    if "event_type" not in columns:
+        if "event" not in columns:
+            raise RuntimeError("batch_events table has no event or event_type column")
+        conn.execute("ALTER TABLE batch_events RENAME COLUMN event TO event_type")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_batch_events ON batch_events(batch_id, id);")
 
 
 def _row_to_dict(row: sqlite3.Row | None) -> dict | None:
@@ -721,6 +750,29 @@ def main(argv: list[str] | None = None) -> None:
         c.close()
         print("Database schema verified and up to date.")
 
+def log_batch_event(conn: sqlite3.Connection, batch_id: int, event: str, details: str | None = None) -> None:
+    """Record a process milestone in the batch_events table"""
+    details_str = json.dumps(details) if isinstance(details,dict) else (details or "")
+    conn.execute(
+        "INSERT INTO batch_events (batch_id, ts, event_type, details) VALUES (?, ?, ?, ?)",
+        (batch_id, now_iso(), event, details_str),
+    )
+
+def get_batch_events(conn: sqlite3.Connection, batch_id: int) -> list[dict]:
+    """Retrieve all milestones recorded for a given batch."""
+    cur = conn.execute(
+        "SELECT id, batch_id, ts, event_type AS event, details "
+        "FROM batch_events WHERE batch_id = ? ORDER BY id ASC",
+        (batch_id,)
+    )
+    return [dict(r) for r in cur.fetchall()]
+
+
+def get_latest_batch(conn: sqlite3.Connection) -> dict | None:
+    """Return the most recent batch record."""
+    cur = conn.execute("SELECT * FROM batches ORDER BY id DESC LIMIT 1")
+    row = cur.fetchone()
+    return _row_to_dict(row)
 
 if __name__ == "__main__":
     main()

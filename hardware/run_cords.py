@@ -427,6 +427,24 @@ def main(argv: list[str] | None = None) -> None:
     batch_id: int | None = None
     batch_drying_timed_out_saved: bool = False
 
+    unclean_prompt_active = False
+    if conn is not None:
+        last_b = db.get_latest_batch(conn)
+        if last_b and last_b.get("state") in ("intake", "drying", "cooldown", "sorting"):
+            unclean_batch_id = last_b["id"]
+            unclean_state = last_b["state"].upper()
+            prompt_data = {
+                "id": "unclean_shutdown",
+                "message": f"Unclean shutdown detected during {unclean_state} (Batch #{unclean_batch_id}). Heaters and fans held OFF. Choose action:",
+                "options": ["recover", "abort"]
+            }
+            db.update_live(conn, active_prompt=prompt_data, heater_on=False, fans_on=False)
+            unclean_prompt_active = True
+            print(f"{stamp()}  *** UNCLEAN SHUTDOWN DETECTED: Batch #{unclean_batch_id} was {unclean_state} ***")
+
+    # Milestone tracking set for active batch
+    logged_milestones: set[str] = set()
+
     try:
         while True:
             real = time.monotonic()
@@ -455,6 +473,25 @@ def main(argv: list[str] | None = None) -> None:
                                 message = f"prompt answered: {action}" if ok else "invalid prompt action"
                                 if "aborted" in sorting_flow.alarms:
                                     controller.abort(f"sorting aborted ({action})")
+                            if prompt_id == "unclean_shutdown" or unclean_prompt_active:
+                                unclean_prompt_active = False
+                                if action == "recover" and last_b:
+                                    batch_id = last_b["id"]
+                                    rec_state = last_b["state"]
+                                    # Resume batch
+                                    db.log_batch_event(conn, batch_id, "batch_recovered", f"Operator recovered batch during {rec_state}")
+                                    message = f"Batch #{batch_id} recovered"
+                                    print(f"{stamp()}  Batch #{batch_id} recovered by operator")
+                                else:
+                                    if last_b:
+                                        db.finish_batch(conn, last_b["id"], controller.record(), "aborted")
+                                        db.log_batch_event(conn, last_b["id"], "batch_aborted", "Aborted by operator after unclean shutdown")
+                                    batch_id = None
+                                    message = "Unclean batch aborted; machine returned to IDLE"
+                                    print(f"{stamp()}  Unclean batch aborted")
+                                db.update_live(conn, active_prompt=None)
+                            elif action == "retry" and getattr(carriage_driver, "state", None) == "fault":
+                                carriage_driver.clear_fault()
                             else:
                                 message = apply_command(controller, row["name"], row["payload"])
                         elif row["name"] == "set_drying_timer":
@@ -921,6 +958,7 @@ def main(argv: list[str] | None = None) -> None:
                 if exhaust_t is not None and exhaust_rh is not None
                 else None
             )
+            previous_state = last_state
             state_changed = commands.state is not last_state
 
             if state_changed:
@@ -929,6 +967,7 @@ def main(argv: list[str] | None = None) -> None:
                     if commands.state is BatchState.INTAKE and last_state in (None, BatchState.IDLE):
                         batch_id = db.start_batch(conn, target_kg=controller.target_kg)
                         batch_drying_timed_out_saved = False
+                        logged_milestones.clear()
                         print(f"{stamp()}  batch #{batch_id} opened")
                     elif commands.state in _FINISHED and batch_id is not None:
                         db.finish_batch(conn, batch_id, controller.record(), commands.state.value)
@@ -940,6 +979,72 @@ def main(argv: list[str] | None = None) -> None:
                     elif batch_id is not None:
                         db.set_batch_state(conn, batch_id, commands.state.value)
                 last_state = commands.state
+
+            # ── Phase 6: Milestone Emission ──────────────────────────────────────────
+            if conn is not None and batch_id is not None:
+                def emit_milestone(evt_name: str, details=None):
+                    if evt_name not in logged_milestones:
+                        db.log_batch_event(conn, batch_id, evt_name, details)
+                        logged_milestones.add(evt_name)
+
+                # 1. Batch Started
+                emit_milestone("batch_started", f"Target: {controller.target_kg} kg")
+
+                # 2. Gate Opened
+                if commands.gate_open:
+                    emit_milestone("gate_opened")
+
+                # 3. Intake Advance Done (when leaving INTAKE)
+                if previous_state is BatchState.INTAKE and commands.state is not BatchState.INTAKE:
+                    emit_milestone("intake_advance_done")
+
+                # 4. Heater ON
+                if commands.heater_on:
+                    emit_milestone("heater_on")
+
+                # 5. Temperature 60°C Reached
+                if chamber is not None and chamber >= 60.0:
+                    emit_milestone("temp_60c_reached", f"Chamber: {chamber:.1f}°C")
+
+                # 6. Fans Pulsing
+                if commands.fans_on and "pulse" in (commands.fan_reason or ""):
+                    emit_milestone("fans_pulsing")
+
+                # 7. Drying Endpoint Reached (or timer expired)
+                if previous_state is BatchState.DRYING and commands.state is not BatchState.DRYING:
+                    reason = "timer" if controller.drying_timed_out else "humidity"
+                    emit_milestone("drying_endpoint_reached", f"Endpoint reached via {reason}")
+
+                # 8. Cooldown Started
+                if commands.state is BatchState.COOLDOWN:
+                    emit_milestone("cooldown_started")
+
+                # 9. Sorting Positioning Done
+                if commands.state is BatchState.SORTING:
+                    emit_milestone("sorting_positioning_done")
+
+                # 10. Sample Captured (valid camera frame)
+                if sample_valid_n and sample_valid_n > 0:
+                    emit_milestone("sample_captured", f"Valid samples: {sample_valid_n}/{sample_total_n}")
+
+                # 11. Batch Grade Assigned
+                if batch_grade:
+                    emit_milestone("batch_grade_assigned", f"Consensus Grade: {batch_grade}")
+
+                # 12. Discharge Completed
+                if sorting_flow and sorting_flow.stage.value == "complete":
+                    emit_milestone("discharge_completed")
+
+                # 13. Weight Gain Verified
+                if sorting_flow and sorting_flow.stage.value in ("verify", "complete"):
+                    emit_milestone("weight_gain_verified")
+
+            # Reset milestones when transitioning to a new batch or IDLE
+            if commands.state is BatchState.INTAKE and previous_state in (None, BatchState.IDLE):
+                logged_milestones.clear()
+            elif commands.state is BatchState.IDLE:
+                logged_milestones.clear()
+
             for alarm in sorted(commands.alarms - last_alarms):
                 print(f"{stamp()}  *** ALARM {alarm} ***")
             for alarm in sorted(last_alarms - commands.alarms):

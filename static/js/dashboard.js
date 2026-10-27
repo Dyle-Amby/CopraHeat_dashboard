@@ -64,6 +64,87 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   C.onLive(function (live) {
+    // ── Phase 6: Milestone Checklist Rendering ────────────────────────────────
+    const ALL_MILESTONES = [
+      'batch_started', 'gate_opened', 'intake_advance_done',
+      'heater_on', 'temp_60c_reached', 'fans_pulsing', 'drying_endpoint_reached',
+      'cooldown_started', 'sorting_positioning_done',
+      'sample_captured', 'batch_grade_assigned', 'discharge_completed', 'weight_gain_verified'
+    ];
+
+    function renderMilestones(events, state) {
+      const card = $('milestoneChecklistCard');
+      if (!card) return;
+
+      if (!events || !events.length) {
+        ALL_MILESTONES.forEach(m => {
+          const el = $('m-' + m);
+          if (el) {
+            el.className = 'milestone-item mb-1 text-muted';
+            el.innerHTML = `<i class="bi bi-circle text-muted me-1"></i> ${el.textContent.trim()}`;
+          }
+        });
+        const badge = $('milestonesProgressBadge');
+        if (badge) badge.textContent = '0 / 13 Milestones';
+        return;
+      }
+
+      const eventNames = new Set(events.map(e => e.event));
+      let completedCount = 0;
+
+      ALL_MILESTONES.forEach(m => {
+        const el = $('m-' + m);
+        if (!el) return;
+        const cleanLabel = el.textContent.replace(/^[\s\S]*?\s\s*/, '').trim() || el.textContent.trim();
+
+        if (eventNames.has(m)) {
+          completedCount++;
+          el.className = 'milestone-item mb-1 text-success fw-bold';
+          el.innerHTML = `<i class="bi bi-check-circle-fill text-success me-1"></i> ${cleanLabel}`;
+        } else {
+          el.className = 'milestone-item mb-1 text-muted';
+          el.innerHTML = `<i class="bi bi-circle text-muted me-1"></i> ${cleanLabel}`;
+        }
+      });
+
+      const badge = $('milestonesProgressBadge');
+      if (badge) badge.textContent = `${completedCount} / 13 Completed`;
+    }
+
+    // ── Phase 6: Dashboard Prompt Handler ─────────────────────────────────────
+    function renderDashboardPrompt(prompt) {
+      const card = $('dashPromptCard');
+      const msgEl = $('dashPromptMessage');
+      const optEl = $('dashPromptOptions');
+      if (!card || !msgEl || !optEl) return;
+
+      if (!prompt) {
+        card.classList.add('d-none');
+        return;
+      }
+
+      msgEl.textContent = prompt.message || 'Machine awaiting operator decision';
+      optEl.innerHTML = '';
+      const options = prompt.options || ['confirm'];
+      options.forEach(opt => {
+        const btn = document.createElement('button');
+        btn.className = (opt === 'abort' || opt === 'discard') ? 'btn btn-sm btn-outline-danger' : 'btn btn-sm btn-primary';
+        btn.textContent = opt.charAt(0).toUpperCase() + opt.slice(1);
+        btn.addEventListener('click', async () => {
+          btn.disabled = true;
+          try {
+            await C.sendCommand('answer_prompt', { id: prompt.id, action: opt });
+          } catch (err) {
+            alert('Failed to submit: ' + err.message);
+          }
+        });
+        optEl.appendChild(btn);
+      });
+      card.classList.remove('d-none');
+    }
+    renderMilestones(live.batch_events || [], live.state);
+    renderDashboardPrompt(live.active_prompt);
+    
     const state = live.state;
     renderPhaseTrack(state);
 

@@ -66,6 +66,60 @@
   </div>
 </div>
 
+<!-- Active Operator Prompt (for Unclean Shutdown / Timer Exploration) -->
+<div id="dashPromptCard" class="alert d-none mb-4" style="border-left: 4px solid var(--gold, #ffc107); background: rgba(224, 168, 0, 0.1);" role="alert">
+  <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+    <div>
+      <i class="bi bi-exclamation-circle-fill me-2 text-warning fs-5"></i>
+      <strong id="dashPromptMessage">Machine awaiting operator decision</strong>
+    </div>
+    <div id="dashPromptOptions" class="d-flex gap-2"></div>
+  </div>
+</div>
+
+<!-- Phase 6: Batch Milestone Flow Checklist -->
+<div class="card-panel mb-4" id="milestoneChecklistCard">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h6 class="card-eyebrow mb-0"><i class="bi bi-list-check me-1"></i> Batch Flow Milestones (Expected vs. Actual)</h6>
+    <span class="badge bg-secondary" id="milestonesProgressBadge">0 / 13 Milestones</span>
+  </div>
+
+  <div class="row g-3 small">
+    <!-- Stage 1: Intake -->
+    <div class="col-md-3 border-end">
+      <div class="fw-bold text-muted mb-2"><i class="bi bi-box-arrow-in-down"></i> 1. INTAKE</div>
+      <div class="milestone-item mb-1" id="m-batch_started"><i class="bi bi-circle text-muted me-1"></i> Batch Started</div>
+      <div class="milestone-item mb-1" id="m-gate_opened"><i class="bi bi-circle text-muted me-1"></i> Hopper Gate Opened</div>
+      <div class="milestone-item" id="m-intake_advance_done"><i class="bi bi-circle text-muted me-1"></i> Belt Advance In</div>
+    </div>
+
+    <!-- Stage 2: Drying -->
+    <div class="col-md-3 border-end">
+      <div class="fw-bold text-muted mb-2"><i class="bi bi-fire"></i> 2. DRYING</div>
+      <div class="milestone-item mb-1" id="m-heater_on"><i class="bi bi-circle text-muted me-1"></i> Heaters Active</div>
+      <div class="milestone-item mb-1" id="m-temp_60c_reached"><i class="bi bi-circle text-muted me-1"></i> 60°C Target Reached</div>
+      <div class="milestone-item mb-1" id="m-fans_pulsing"><i class="bi bi-circle text-muted me-1"></i> Airflow Fans Pulsing</div>
+      <div class="milestone-item" id="m-drying_endpoint_reached"><i class="bi bi-circle text-muted me-1"></i> Endpoint Reached</div>
+    </div>
+
+    <!-- Stage 3: Cooldown -->
+    <div class="col-md-3 border-end">
+      <div class="fw-bold text-muted mb-2"><i class="bi bi-snow"></i> 3. COOLDOWN</div>
+      <div class="milestone-item mb-1" id="m-cooldown_started"><i class="bi bi-circle text-muted me-1"></i> Cooldown Initiated</div>
+      <div class="milestone-item" id="m-sorting_positioning_done"><i class="bi bi-circle text-muted me-1"></i> Carriage Positioned</div>
+    </div>
+
+    <!-- Stage 4: Sorting & Discharge -->
+    <div class="col-md-3">
+      <div class="fw-bold text-muted mb-2"><i class="bi bi-eye"></i> 4. SORTING</div>
+      <div class="milestone-item mb-1" id="m-sample_captured"><i class="bi bi-circle text-muted me-1"></i> Vision Slices Graded</div>
+      <div class="milestone-item mb-1" id="m-batch_grade_assigned"><i class="bi bi-circle text-muted me-1"></i> Batch Grade Assigned</div>
+      <div class="milestone-item mb-1" id="m-discharge_completed"><i class="bi bi-circle text-muted me-1"></i> Discharge Completed</div>
+      <div class="milestone-item" id="m-weight_gain_verified"><i class="bi bi-circle text-muted me-1"></i> Weight Gain Verified</div>
+    </div>
+  </div>
+</div>
+
 <div class="row g-4 mb-4">
   <div class="col-lg-7">
     <div class="card-panel h-100">

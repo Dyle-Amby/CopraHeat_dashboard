@@ -50,6 +50,32 @@ class TestSchema(DBCase):
         db.init(self.conn)
         self.assertEqual(db.get_settings(self.conn)["target_kg"], "3.5")
 
+    def test_init_migrates_legacy_batch_event_column(self):
+        batch_id = db.start_batch(self.conn, target_kg=2.0)
+        self.conn.execute("DROP TABLE batch_events")
+        self.conn.execute("""
+            CREATE TABLE batch_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id INTEGER REFERENCES batches(id),
+                ts TEXT NOT NULL,
+                event TEXT NOT NULL,
+                details TEXT
+            )
+        """)
+        self.conn.execute(
+            "INSERT INTO batch_events (batch_id, ts, event, details) VALUES (?, ?, ?, ?)",
+            (batch_id, "2026-01-01T00:00:00", "batch_started", "legacy event"),
+        )
+
+        db.init(self.conn)
+
+        columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(batch_events)")}
+        self.assertIn("event_type", columns)
+        self.assertNotIn("event", columns)
+        events = db.get_batch_events(self.conn, batch_id)
+        self.assertEqual(events[0]["event"], "batch_started")
+        self.assertEqual(events[0]["details"], "legacy event")
+
     def test_a_future_schema_refuses_to_open(self):
         self.conn.execute(f"PRAGMA user_version={db.SCHEMA_VERSION + 1}")
         with self.assertRaises(RuntimeError):
