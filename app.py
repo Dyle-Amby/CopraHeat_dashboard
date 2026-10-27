@@ -243,7 +243,12 @@ def create_app(db_path=None) -> Flask:
         lock = db.get_calibration_lock(conn)
         out["calibration_locked"] = lock is not None
         out["calibration_lock"] = lock
+        out["settings"] = db.get_settings(conn)
         return jsonify(out)
+
+    @app.get("/api/settings")
+    def api_settings():
+        return jsonify(db.get_settings(get_conn()))
 
     @app.get("/api/batches")
     def api_batches():

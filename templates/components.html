@@ -132,29 +132,296 @@
 
     <!-- 2. CONVEYOR TAB -->
     <div class="tab-pane fade" id="tab-conveyor">
+        <!-- Zone 1: Status -->
+        <section class="card mb-3">
+            <div class="card-header fw-bold d-flex justify-content-between align-items-center">
+                <span>Status</span>
+                <span id="conveyorStaleBadge" class="badge bg-warning text-dark d-none">Calibration Stale</span>
+            </div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-3">
+                        <span class="text-muted">Stepper Driver</span><br>
+                        <span id="c-stepper-state" class="badge bg-secondary">Unverified (output only)</span>
+                        <div class="small text-muted mt-1" id="c-stepper-last">Last: —</div>
+                    </div>
+                    <div class="col-md-3">
+                        <span class="text-muted">Motion State</span><br>
+                        <span id="c-motion-state" class="fw-bold">—</span>
+                        <div class="small text-muted mt-1">Result: <span id="c-last-cmd">—</span></div>
+                    </div>
+                    <div class="col-md-3">
+                        <span class="text-muted">Absolute Step Position</span><br>
+                        <strong id="c-position" class="fs-5">—</strong> steps
+                    </div>
+                    <div class="col-md-3">
+                        <span class="text-muted">Calculated Speed</span><br>
+                        <strong id="c-speed-rpm" class="fs-5">—</strong> <span class="small text-muted">RPM</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Driver Configuration Alert Banner -->
+        <div class="alert alert-warning d-flex align-items-center justify-content-between d-none"
+            id="conveyorStaleAlert" role="alert">
+            <div>
+                <i class="bi bi-exclamation-triangle-fill me-2 fs-5"></i>
+                <strong>Conveyor Calibration Stale:</strong> Driver settings (P00/Hz) were updated or belt was
+                re-tensioned. Step count recalibration is required.
+            </div>
+            <button class="btn btn-sm btn-outline-dark" id="btnAcknowledgeFresh">Mark Fresh</button>
+        </div>
+
+        <!-- Zone 2: Driver Configuration -->
+        <section class="card mb-3" id="conveyor-driver-zone">
+            <div class="card-header fw-bold d-flex justify-content-between align-items-center">
+                <span>Driver Parameters (HBS57H / Stepper)</span>
+                <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse"
+                    data-bs-target="#driverConfigBody">
+                    Configure
+                </button>
+            </div>
+            <div class="card-body collapse show" id="driverConfigBody">
+                <div class="row g-3 align-items-end">
+                    <div class="col-md-4">
+                        <label class="form-label small text-muted">Pulses / Revolution (P00)</label>
+                        <input type="number" class="form-control form-control-sm" id="inputP00" value="10000" min="200"
+                            step="100">
+                        <div class="form-text small">Default: 10,000 pulses/rev (HBS57H DIP switch setting)</div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small text-muted">Step Frequency (Hz)</label>
+                        <input type="number" class="form-control form-control-sm" id="inputConveyorHz" value="400"
+                            min="50" max="2000" step="50">
+                        <div class="form-text small">Default: 400.0 Hz (Safe startup speed)</div>
+                    </div>
+                    <div class="col-md-4">
+                        <button class="btn btn-sm btn-outline-primary w-100" id="btnSaveDriverConfig">
+                            <i class="bi bi-save"></i> Save Driver Settings
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Zone 3: Jog Controller -->
+        <section class="card mb-3 border-primary" id="conveyor-test-zone">
+            <div class="card-header bg-primary text-white fw-bold d-flex justify-content-between align-items-center">
+                <span>Manual Jog Controller</span>
+                <span class="badge bg-light text-primary">Lock Required</span>
+            </div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <!-- Quick Nudge Buttons -->
+                    <div class="col-lg-6">
+                        <label class="form-label small text-muted fw-bold">Discrete Step Nudges</label>
+                        <div class="d-flex flex-wrap gap-2 mb-2">
+                            <button class="btn btn-outline-secondary btn-sm flex-fill" data-jog="-1000">-1000</button>
+                            <button class="btn btn-outline-secondary btn-sm flex-fill" data-jog="-100">-100</button>
+                            <button class="btn btn-outline-secondary btn-sm flex-fill" data-jog="-10">-10</button>
+                            <button class="btn btn-outline-primary btn-sm flex-fill" data-jog="10">+10</button>
+                            <button class="btn btn-outline-primary btn-sm flex-fill" data-jog="100">+100</button>
+                            <button class="btn btn-outline-primary btn-sm flex-fill" data-jog="1000">+1000</button>
+                        </div>
+                        <div class="input-group input-group-sm">
+                            <button class="btn btn-outline-secondary" id="btnCustomJogRev"><i
+                                    class="bi bi-chevron-double-left"></i> Jog Rev</button>
+                            <input type="number" class="form-control text-center" id="inputCustomJog" value="500"
+                                min="1" step="50">
+                            <button class="btn btn-outline-primary" id="btnCustomJogFwd">Jog Fwd <i
+                                    class="bi bi-chevron-double-right"></i></button>
+                        </div>
+                    </div>
+
+                    <!-- Continuous Jog & Stop -->
+                    <div class="col-lg-6 d-flex flex-column justify-content-between">
+                        <div>
+                            <label class="form-label small text-muted fw-bold">Continuous Motion &amp; E-Stop</label>
+                            <div class="btn-group w-100 mb-2">
+                                <button class="btn btn-outline-dark btn-sm" id="btnHoldJogRev">
+                                    <i class="bi bi-arrow-left-circle"></i> Run Reverse (2000)
+                                </button>
+                                <button class="btn btn-outline-dark btn-sm" id="btnHoldJogFwd">
+                                    Run Forward (2000) <i class="bi bi-arrow-right-circle"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <button class="btn btn-danger btn-lg w-100 fw-bold" id="btnStopConveyor">
+                            <i class="bi bi-stop-circle-fill me-1"></i> STOP CONVEYOR
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Zone 4: 3-Leg Step Calibration Wizard -->
+        <section class="card mb-3" id="conveyor-cal-zone">
+            <div class="card-header fw-bold bg-light d-flex justify-content-between align-items-center">
+                <span>3-Leg Step Calibration Wizard</span>
+                <span class="badge bg-secondary" id="wizardStatusBadge">Step 1: Set Reference</span>
+            </div>
+            <div class="card-body">
+                <!-- Leg Selection Pills -->
+                <ul class="nav nav-pills nav-fill mb-3" id="pills-legs">
+                    <li class="nav-item">
+                        <button class="nav-link active small py-1" data-leg="hopper_to_chamber" id="pillLeg1">
+                            Leg 1: Hopper &rarr; Chamber<br>
+                            <span class="small text-muted" id="savedStepsLeg1">— steps</span>
+                        </button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link small py-1" data-leg="chamber_to_camera" id="pillLeg2">
+                            Leg 2: Chamber &rarr; Camera<br>
+                            <span class="small text-muted" id="savedStepsLeg2">— steps</span>
+                        </button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link small py-1" data-leg="camera_to_discharge" id="pillLeg3">
+                            Leg 3: Camera &rarr; Discharge<br>
+                            <span class="small text-muted" id="savedStepsLeg3">— steps</span>
+                        </button>
+                    </li>
+                </ul>
+
+                <!-- Active Leg Instructions & Status -->
+                <div class="alert alert-secondary py-2 small mb-3" id="legInstructionAlert">
+                    <strong>Protocol for Leg 1 (Hopper &rarr; Chamber):</strong><br>
+                    1. Place physical marker directly under the hopper chute.<br>
+                    2. Click <strong>"Set Start (Zero Ref)"</strong>.<br>
+                    3. Use the Jog buttons above to advance the marker until centered under the heating chamber
+                    inlet.<br>
+                    4. Click <strong>"Record Trial"</strong>. Run at least 3 trials to verify consistency (&le; 2%
+                    spread).
+                </div>
+
+                <div class="row g-3">
+                    <!-- Left: Step Tracker & Controls -->
+                    <div class="col-md-6 border-end">
+                        <div class="p-3 bg-light rounded text-center mb-3">
+                            <div class="text-muted small">Relative Steps from Start Reference</div>
+                            <div class="display-6 fw-bold text-primary" id="wizardDeltaSteps">0</div>
+                            <div class="small text-muted">Baseline: <span id="wizardBaselinePos">—</span> steps</div>
+                        </div>
+
+                        <div class="d-flex gap-2 mb-2">
+                            <button class="btn btn-outline-secondary btn-sm flex-fill" id="btnWizardSetStart">
+                                <i class="bi bi-geo-alt"></i> Set Start (Zero Ref)
+                            </button>
+                            <button class="btn btn-primary btn-sm flex-fill" id="btnWizardRecordTrial">
+                                <i class="bi bi-plus-circle"></i> Record Trial
+                            </button>
+                        </div>
+                        <button class="btn btn-outline-warning btn-sm w-100" id="btnWizardSlipCheck">
+                            <i class="bi bi-arrow-counterclockwise"></i> Slip Return Check (Reverse delta)
+                        </button>
+                        <div class="form-text small text-center mt-1">Reverses the exact steps moved to check if marker
+                            returns to start line.</div>
+                    </div>
+
+                    <!-- Right: Recorded Trials & Save -->
+                    <div class="col-md-6">
+                        <h6 class="small fw-bold text-muted">Recorded Trials (<span id="trialCount">0</span>/3 required)
+                        </h6>
+                        <div class="table-responsive mb-2" style="max-height: 140px; overflow-y: auto;">
+                            <table class="table table-sm table-bordered text-center small mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Steps</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="trialTableBody">
+                                    <tr>
+                                        <td colspan="3" class="text-muted">No trials recorded yet</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- Statistics Panel -->
+                        <div class="p-2 border rounded bg-white small mb-3">
+                            <div class="row text-center">
+                                <div class="col-3">Mean: <strong id="statMean">—</strong></div>
+                                <div class="col-3">Min: <span id="statMin">—</span></div>
+                                <div class="col-3">Max: <span id="statMax">—</span></div>
+                                <div class="col-3">Spread: <strong id="statSpread">—%</strong></div>
+                            </div>
+                        </div>
+
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-success btn-sm flex-fill fw-bold" id="btnWizardSaveLeg" disabled>
+                                <i class="bi bi-check-circle"></i> Accept &amp; Save Leg
+                            </button>
+                            <button class="btn btn-outline-info btn-sm" id="btnWizardTestMove"
+                                title="Run verified steps once">
+                                <i class="bi bi-play-circle"></i> Test Move
+                            </button>
+                            <button class="btn btn-outline-danger btn-sm" id="btnWizardClearTrials"
+                                title="Reset trials">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- 3. CARRIAGE TAB -->
+    <div class="tab-pane fade" id="tab-carriage">
         <section class="card mb-3">
             <div class="card-header fw-bold">Status</div>
             <div class="card-body">
                 <div class="row g-3">
                     <div class="col-md-4">
                         <span class="text-muted">Stepper Driver</span><br>
-                        <span id="c-stepper-state" class="badge bg-secondary">Unverified (output
-                            only)</span>
-                        <div class="small text-muted mt-1" id="c-stepper-last">Last: —</div>
+                        <span id="car-stepper-state" class="badge bg-secondary">Unverified (output only)</span>
+                        <div class="small text-muted mt-1" id="car-stepper-last">Last: —</div>
                     </div>
                     <div class="col-md-4">
-                        <span class="text-muted">Motion State</span><br>
-                        <span id="c-motion-state">—</span>
-                        <div class="small text-muted mt-1">Result: <span id="c-last-cmd">—</span></div>
+                        <span class="text-muted">Current Bin Position</span><br>
+                        <strong id="car-bin">—</strong>
                     </div>
                     <div class="col-md-4">
-                        <span class="text-muted">Position</span><br>
-                        <strong id="c-position">—</strong> steps
+                        <span class="text-muted">Last Bin Trigger</span><br>
+                        <span id="car-last-trigger">—</span>
+                    </div>
+                </div>
+
+                <h6 class="text-muted mt-4 mb-2">Limit Switches (NC with pull-ups)</h6>
+                <div class="row g-3">
+                    <div class="col-sm-4"><span class="text-muted">LS1 (Great top)</span><br><span id="car-ls1">—</span>
+                    </div>
+                    <div class="col-sm-4"><span class="text-muted">LS2 (Good)</span><br><span id="car-ls2">—</span>
+                    </div>
+                    <div class="col-sm-4"><span class="text-muted">LS3 (Bad bottom)</span><br><span
+                            id="car-ls3">—</span></div>
+                </div>
+
+                <h6 class="text-muted mt-4 mb-2">Bin Load Cells (HX711)</h6>
+                <div class="row g-3">
+                    <div class="col-sm-4">
+                        <span class="text-muted">Bin Great</span><br>
+                        <span id="car-hx-great" class="badge bg-secondary">—</span>
+                        <div><strong id="car-bin-great">—</strong> kg</div>
+                    </div>
+                    <div class="col-sm-4">
+                        <span class="text-muted">Bin Good</span><br>
+                        <span id="car-hx-good" class="badge bg-secondary">—</span>
+                        <div><strong id="car-bin-good">—</strong> kg</div>
+                    </div>
+                    <div class="col-sm-4">
+                        <span class="text-muted">Bin Bad</span><br>
+                        <span id="car-hx-bad" class="badge bg-secondary">—</span>
+                        <div><strong id="car-bin-bad">—</strong> kg</div>
                     </div>
                 </div>
             </div>
         </section>
-        <!-- Zone 2: Carriage Calibration -->
+
+        <!-- Zone 2: Carriage Calibration (Bin Scales) -->
         <section class="card mb-3" id="carriage-cal-zone">
             <div class="card-header fw-bold">Bin Scale Calibration (HX711)</div>
             <div class="card-body">
@@ -196,60 +463,8 @@
                 </div>
             </div>
         </section>
-    </div>
 
-    <!-- 3. CARRIAGE TAB -->
-    <div class="tab-pane fade" id="tab-carriage">
-        <section class="card mb-3">
-            <div class="card-header fw-bold">Status</div>
-            <div class="card-body">
-                <div class="row g-3">
-                    <div class="col-md-4">
-                        <span class="text-muted">Stepper Driver</span><br>
-                        <span id="car-stepper-state" class="badge bg-secondary">Unverified
-                            (output only)</span>
-                        <div class="small text-muted mt-1" id="car-stepper-last">Last: —</div>
-                    </div>
-                    <div class="col-md-4">
-                        <span class="text-muted">Current Bin Position</span><br>
-                        <strong id="car-bin">—</strong>
-                    </div>
-                    <div class="col-md-4">
-                        <span class="text-muted">Last Bin Trigger</span><br>
-                        <span id="car-last-trigger">—</span>
-                    </div>
-                </div>
-
-                <h6 class="text-muted mt-4 mb-2">Limit Switches (NC with pull-ups)</h6>
-                <div class="row g-3">
-                    <div class="col-sm-4"><span class="text-muted">LS1 (Great
-                            top)</span><br><span id="car-ls1">—</span></div>
-                    <div class="col-sm-4"><span class="text-muted">LS2 (Good)</span><br><span id="car-ls2">—</span>
-                    </div>
-                    <div class="col-sm-4"><span class="text-muted">LS3 (Bad
-                            bottom)</span><br><span id="car-ls3">—</span></div>
-                </div>
-
-                <h6 class="text-muted mt-4 mb-2">Bin Load Cells (HX711)</h6>
-                <div class="row g-3">
-                    <div class="col-sm-4">
-                        <span class="text-muted">Bin Great</span><br>
-                        <span id="car-hx-great" class="badge bg-secondary">—</span>
-                        <div><strong id="car-bin-great">—</strong> kg</div>
-                    </div>
-                    <div class="col-sm-4">
-                        <span class="text-muted">Bin Good</span><br>
-                        <span id="car-hx-good" class="badge bg-secondary">—</span>
-                        <div><strong id="car-bin-good">—</strong> kg</div>
-                    </div>
-                    <div class="col-sm-4">
-                        <span class="text-muted">Bin Bad</span><br>
-                        <span id="car-hx-bad" class="badge bg-secondary">—</span>
-                        <div><strong id="car-bin-bad">—</strong> kg</div>
-                    </div>
-                </div>
-            </div>
-        </section>
+        <!-- Zone 3: Carriage Manual Positioning -->
         <section class="card mb-3" id="carriage-test-zone">
             <div class="card-header fw-bold">Manual Positioning &amp; Limit Switch Diagnostics</div>
             <div class="card-body">

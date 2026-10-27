@@ -547,6 +547,76 @@ def main(argv: list[str] | None = None) -> None:
                                     message = f"Bin {target_bin} scale: {sc:.1f} counts/kg"
                             else:
                                 message = f"Simulated bin {target_bin} {action} complete"
+                        elif row["name"] == "jog_conveyor":
+                            payload_dict = json.loads(row["payload"]) if row["payload"] else {}
+                            steps = int(payload_dict.get("steps", 100))
+                            hz = float(payload_dict.get("hz") or db.get_setting(conn, "conveyor_hz") or 400.0)
+                            forward = payload_dict.get("forward")
+                            if forward is None:
+                                forward = (steps >= 0)
+                            steps = abs(steps)
+                            if conveyor is not None:
+                                if conveyor.busy:
+                                    conveyor.stop()
+                                conveyor.move(steps, hz=hz, forward=forward, now=now)
+                                dir_str = "forward" if forward else "reverse"
+                                message = f"Conveyor jogging {steps} steps ({dir_str}) at {hz:.0f} Hz"
+                            else:
+                                message = "No conveyor driver active"
+
+                        elif row["name"] == "stop_conveyor":
+                            if conveyor is not None:
+                                stopped_steps = conveyor.stop()
+                                message = f"Conveyor stopped (decelerated {stopped_steps} steps)"
+                            else:
+                                message = "No conveyor driver active"
+
+                        elif row["name"] == "save_conveyor_leg":
+                            payload_dict = json.loads(row["payload"]) if row["payload"] else {}
+                            leg = payload_dict.get("leg")
+                            steps = int(payload_dict.get("steps", 0))
+                            meta = payload_dict.get("meta", {})
+                            meta_str = json.dumps(meta) if isinstance(meta, dict) else str(meta)
+
+                            if leg == "hopper_to_chamber":
+                                db.set_setting(conn, "hopper_to_chamber_steps", str(steps))
+                                db.set_setting(conn, "leg_hopper_to_chamber_meta", meta_str)
+                                if conveyor is not None:
+                                    conveyor.hopper_to_chamber_steps = steps
+                            elif leg == "chamber_to_camera":
+                                db.set_setting(conn, "chamber_to_camera_steps", str(steps))
+                                db.set_setting(conn, "leg_chamber_to_camera_meta", meta_str)
+                                if sorting_flow is not None:
+                                    sorting_flow.chamber_to_camera_steps = steps
+                            elif leg == "camera_to_discharge":
+                                db.set_setting(conn, "camera_to_discharge_steps", str(steps))
+                                db.set_setting(conn, "leg_camera_to_discharge_meta", meta_str)
+                                if sorting_flow is not None:
+                                    sorting_flow.camera_to_discharge_steps = steps
+                            else:
+                                raise ValueError(f"Unknown conveyor leg: {leg}")
+
+                            db.set_setting(conn, "conveyor_cal_stale", "0")
+                            message = f"Conveyor leg '{leg}' saved: {steps} steps (calibration marked fresh)"
+
+                        elif row["name"] == "set_conveyor_p00":
+                            payload_dict = json.loads(row["payload"]) if row["payload"] else {}
+                            p00 = int(payload_dict.get("p00", 10000))
+                            hz = payload_dict.get("hz")
+                            db.set_setting(conn, "conveyor_p00", str(p00))
+                            if hz is not None:
+                                hz = float(hz)
+                                db.set_setting(conn, "conveyor_hz", str(hz))
+                                if conveyor is not None:
+                                    conveyor.default_hz = hz
+                            db.set_setting(conn, "conveyor_cal_stale", "1")
+                            message = f"Conveyor driver updated: P00={p00}, Hz={hz or 'unchanged'} (cal marked stale)"
+
+                        elif row["name"] == "mark_conveyor_stale":
+                            payload_dict = json.loads(row["payload"]) if row["payload"] else {}
+                            stale_flag = "1" if payload_dict.get("stale", True) else "0"
+                            db.set_setting(conn, "conveyor_cal_stale", stale_flag)
+                            message = f"Conveyor calibration stale flag set to {stale_flag}" 
                         else:
                             message = apply_command(controller, row["name"], row["payload"])
                         db.resolve_command(conn, row["id"], db.DONE, message)
