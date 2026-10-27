@@ -3,6 +3,10 @@ from hardware import db
 from tests.test_app import AppCase
 
 class TestCalibrationCommands(AppCase):
+    def setUp(self):
+        super().setUp()
+        self.supervisor_up("idle")
+
     def test_maintenance_gate_blocks_without_lock(self):
         # Without lock, maintenance command is rejected with 409
         resp = self.client.post("/api/commands", json={"name": "tare_hopper", "payload": {"gate": "closed"}})
