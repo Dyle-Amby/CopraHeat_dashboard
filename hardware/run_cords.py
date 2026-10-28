@@ -1013,6 +1013,7 @@ def main(argv: list[str] | None = None) -> None:
                     sorting_flow = None
                     prev_capture_requested = False
                     carriage_driver.stop()
+                carriage_driver.update(now)
                 grade_ready = False
                 batch_grade = None
                 needs_review = False

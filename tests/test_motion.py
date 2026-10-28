@@ -235,6 +235,90 @@ class TestCarriageDrivers(unittest.TestCase):
         self.assertEqual(driver.state, "moving")
         driver.stepper.start.assert_called_once_with(6000, 300.0, forward=False)
 
+    def test_carriage_driver_continues_to_target_after_homing(self):
+        driver = CarriageDriver.__new__(CarriageDriver)
+        driver.order = ("LS3", "LS2", "LS1")
+        driver.bins = ("bad", "good", "great")
+        driver.default_hz = 400.0
+        driver.release_within = 400
+        driver.max_travel_steps = 6000
+        driver.stops = {"bad": "LS3", "good": "LS2", "great": "LS1"}
+        driver.bins_by_stop = {"LS3": "bad", "LS2": "good", "LS1": "great"}
+        driver.stepper = MagicMock()
+        driver.stepper.busy = True
+        driver.state = "idle"
+        driver.current_bin = None
+        driver.last_fault = None
+        driver._watch = None
+        driver._target_bin = None
+        driver._target_switch = None
+        driver._pending_target_bin = None
+        driver._move_started_at = None
+        driver._move_hz = driver.default_hz
+
+        limits_mock = MagicMock()
+        limits_mock.read.side_effect = [
+            {"LS1": False, "LS2": False, "LS3": False},
+            {"LS1": False, "LS2": False, "LS3": True},
+            {"LS1": False, "LS2": False, "LS3": True},
+        ]
+        driver._limits = limits_mock
+        driver._open_limits = lambda: limits_mock
+
+        self.assertTrue(driver.goto("great", hz=300.0))
+        driver.update()
+
+        self.assertEqual(driver.state, "moving")
+        self.assertEqual(driver.current_bin, "bad")
+        self.assertEqual(driver._target_bin, "great")
+        self.assertEqual(driver._target_switch, "LS1")
+        self.assertEqual(driver._pending_target_bin, None)
+        self.assertEqual(
+            driver.stepper.start.call_args_list,
+            [
+                unittest.mock.call(6000, 300.0, forward=False),
+                unittest.mock.call(6000, 300.0, forward=True),
+            ],
+        )
+
+    def test_carriage_driver_latches_a_sampled_target_switch_hit(self):
+        driver = CarriageDriver.__new__(CarriageDriver)
+        driver.order = ("LS3", "LS2", "LS1")
+        driver.bins = ("bad", "good", "great")
+        driver.default_hz = 400.0
+        driver.release_within = 400
+        driver.max_travel_steps = 6000
+        driver.stops = {"bad": "LS3", "good": "LS2", "great": "LS1"}
+        driver.bins_by_stop = {"LS3": "bad", "LS2": "good", "LS1": "great"}
+        driver.stepper = MagicMock()
+        driver.stepper.busy = True
+        driver.state = "idle"
+        driver.current_bin = "good"
+        driver.last_fault = None
+        driver._watch = None
+        driver._target_bin = None
+        driver._target_switch = None
+        driver._pending_target_bin = None
+        driver._move_started_at = None
+        driver._move_hz = driver.default_hz
+
+        limits_mock = MagicMock()
+        limits_mock.read.side_effect = [
+            {"LS1": False, "LS2": True, "LS3": False},
+            {"LS1": True, "LS2": False, "LS3": False},
+        ]
+        driver._limits = limits_mock
+        driver._open_limits = lambda: limits_mock
+
+        self.assertTrue(driver.goto("great", hz=300.0))
+        driver.update()
+
+        self.assertEqual(driver.state, "at_target")
+        self.assertEqual(driver.current_bin, "great")
+        driver.update()
+        self.assertEqual(driver.state, "at_target")
+        driver.stepper.stop.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

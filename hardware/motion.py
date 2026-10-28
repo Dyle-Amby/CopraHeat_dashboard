@@ -410,6 +410,35 @@ class CarriageDriver:
             self.current_bin = self._target_bin
             self._watch = None
             print(f"DEBUG carriage: ARRIVED -> at_target, current_bin={self.current_bin}")
+            pending_target = self._pending_target_bin
+            self._pending_target_bin = None
+            if pending_target is not None:
+                if detail is None:
+                    self.state = "fault"
+                    self.last_fault = "carriage homing completed without identifying a limit switch"
+                else:
+                    self.current_bin = self.bins_by_stop[detail]
+                    target_switch = self.stops[pending_target]
+                    if detail == target_switch:
+                        self.current_bin = pending_target
+                    else:
+                        up = moving_up(detail, target_switch, order=self.order)
+                        self._watch = MoveWatch(
+                            switches,
+                            target_switch,
+                            order=self.order,
+                            release_within=self.release_within,
+                            up=up,
+                        )
+                        self._target_bin = pending_target
+                        self._target_switch = target_switch
+                        self._move_started_at = time.monotonic()
+                        self.state = "moving"
+                        self.stepper.start(
+                            self.max_travel_steps,
+                            self._move_hz,
+                            forward=up,
+                        )
         elif status == FAULT:
             self.stepper.stop()
             self.state = "fault"
