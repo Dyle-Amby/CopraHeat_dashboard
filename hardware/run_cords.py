@@ -24,6 +24,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+BASE_DIR = Path(__file__).resolve().parent.parent
+
 from hardware import db, pins, sensors
 from hardware.batch import BatchController, Commands, Inputs, apply_command
 from hardware.health import ComponentHealthRegistry
