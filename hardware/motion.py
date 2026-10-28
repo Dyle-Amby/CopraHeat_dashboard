@@ -391,6 +391,7 @@ class CarriageDriver:
             return self.state
 
         if self._watch is None or self._limits is None:
+            print(f"DEBUG carriage update: state={self.state} no watch or limits")
             return self.state
 
         rate = self._move_hz if self._move_hz > 0 else self.default_hz
@@ -398,36 +399,29 @@ class CarriageDriver:
         steps_sent = int(elapsed * rate)
 
         switches = self._limits.read()
+        print(f"DEBUG carriage: target={self._target_bin} current={self.current_bin} switches={switches} steps_sent={steps_sent} stepper_busy={self.stepper.busy}")
+
         status, detail = self._watch.update(switches, steps_sent)
+        print(f"DEBUG carriage: watch status={status} detail={detail}")
 
         if status == ARRIVED:
             self.stepper.stop()
-            if self._target_bin is None:
-                self.current_bin = self.bins_by_stop.get(detail)
-                self.state = "at_target"
-                self._watch = None
-                pending = self._pending_target_bin
-                self._pending_target_bin = None
-                if pending is not None:
-                    self.goto(pending, hz=self._move_hz, now=now)
-                return self.state
             self.state = "at_target"
             self.current_bin = self._target_bin
             self._watch = None
-            self._pending_target_bin = None
+            print(f"DEBUG carriage: ARRIVED -> at_target, current_bin={self.current_bin}")
         elif status == FAULT:
             self.stepper.stop()
             self.state = "fault"
             self.last_fault = detail
             self._watch = None
-            self._pending_target_bin = None
+            print(f"DEBUG carriage: FAULT -> {detail}")
         elif not self.stepper.busy or steps_sent >= self.max_travel_steps:
             self.stepper.stop()
             self.state = "fault"
-            target_desc = self._target_switch or "a known switch"
-            self.last_fault = f"carriage move timed out after ~{steps_sent} steps without reaching {target_desc}"
+            self.last_fault = f"carriage move timed out after ~{steps_sent} steps without reaching {self._target_switch}"
             self._watch = None
-            self._pending_target_bin = None
+            print(f"DEBUG carriage: timeout fault -> {self.last_fault}")
 
         return self.state
 

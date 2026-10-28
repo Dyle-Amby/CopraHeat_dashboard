@@ -958,6 +958,7 @@ def main(argv: list[str] | None = None) -> None:
 
                 # ── drive carriage & conveyor, then tick SortingFlow ──────────
                 carriage_driver.update(now)
+                print(f"DEBUG supervisor: carriage state={carriage_driver.state} current_bin={carriage_driver.current_bin} last_fault={carriage_driver.last_fault}")
                 conveyor.update(now)
 
                 if sorting_flow.conveyor_move_steps > 0:
