@@ -113,9 +113,13 @@ class StepperConveyor(BaseConveyor):
         rate = hz if hz is not None and hz > 0 else self.default_hz
         self._target_steps = steps
         self._move_forward = forward
-        self.last_result = None
+        self.last_result = "starting"
         self._moved_at = time.monotonic()
-        self.stepper.start(steps, rate, forward=forward)
+        try:
+            self.stepper.start(steps, rate, forward=forward)
+        except Exception as exc:
+            self.last_result = "refused"
+            raise RuntimeError(f"conveyor stepper failed to start move: {exc}") from exc
         self._was_busy = True
         return True
 
@@ -331,6 +335,14 @@ class CarriageDriver:
             self._target_switch = None
             self.last_fault = None
 
+        if self.state == "fault":
+            # One automatic retry from the last known bin is allowed: if the carriage
+            # stopped mid-travel and never reached a downstream switch, keep going
+            # from the last switch it did trigger instead of forcing a manual clear.
+            self.clear_fault()
+            if self.current_bin is not None and self.current_bin != target_bin:
+                self.state = "idle"
+
         # Item 13: After a fault, goto must not auto-retry without explicit clear_fault / prompt answer
         if self.state in ("moving", "fault"):
             return False
@@ -340,6 +352,11 @@ class CarriageDriver:
         current_switches = ls.read()
 
         current_loc = located_at(current_switches)
+        if self.state == "idle" and self.current_bin is not None and self.current_bin != target_bin:
+            # Retry from the last switch we definitively identified, even if the
+            # live switch read is momentarily clear in the middle of a travel segment.
+            current_loc = self.stops[self.current_bin]
+
         if current_loc == target_switch:
             self.current_bin = target_bin
             self.state = "at_target"
@@ -366,6 +383,28 @@ class CarriageDriver:
             self.state = "moving"
             self.last_fault = None
             return True
+
+        if self.current_bin is not None and self.current_bin != target_bin:
+            last_switch = self.stops[self.current_bin]
+            if current_loc is None or current_loc == last_switch:
+                current_loc = last_switch
+                up = moving_up(last_switch, target_switch, order=self.order)
+                self._watch = MoveWatch(
+                    {name: (name == last_switch) for name in self.order},
+                    target_switch,
+                    order=self.order,
+                    release_within=self.release_within,
+                    up=up,
+                )
+                self._target_bin = target_bin
+                self._target_switch = target_switch
+                self._pending_target_bin = None
+                forward = bool(up)
+                self.stepper.start(self.max_travel_steps, rate, forward=forward)
+                self._move_started_at = time.monotonic()
+                self.state = "moving"
+                self.last_fault = None
+                return True
 
         up = moving_up(current_loc, target_switch, order=self.order)
         self._watch = MoveWatch(

@@ -705,7 +705,8 @@ def main(argv: list[str] | None = None) -> None:
                             if conveyor is not None:
                                 if conveyor.busy:
                                     conveyor.stop()
-                                conveyor.move(steps, hz=hz, forward=forward, now=now)
+                                if not conveyor.move(steps, hz=hz, forward=forward, now=now):
+                                    raise RuntimeError(f"conveyor move refused: steps={steps}, hz={hz}, forward={forward}")
                                 dir_str = "forward" if forward else "reverse"
                                 message = f"Conveyor jogging {steps} steps ({dir_str}) at {hz:.0f} Hz"
                             else:
@@ -1030,6 +1031,8 @@ def main(argv: list[str] | None = None) -> None:
                     prev_capture_requested = False
                     carriage_driver.stop()
                 carriage_driver.update(now)
+                if conveyor is not None:
+                    conveyor.update(now)
                 grade_ready = False
                 batch_grade = None
                 needs_review = False
