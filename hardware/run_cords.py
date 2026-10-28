@@ -481,16 +481,24 @@ def main(argv: list[str] | None = None) -> None:
 
     classifier = None
     webcam = None
+
+    health = ComponentHealthRegistry()
+
     if not args.simulate and not args.dry_run:
         from hardware.vision import CopraClassifier, USBWebcam
         classifier = CopraClassifier()
         webcam = USBWebcam()
+        try:
+            if webcam.open():
+                health.record_ok("camera", time.monotonic(), {"camera_index": webcam.camera_index})
+            else:
+                health.record_fault("camera", "camera device did not open", time.monotonic(), {"camera_index": webcam.camera_index})
+        except Exception:
+            health.record_fault("camera", "camera device did not open", time.monotonic())
 
     sorting_flow: SortingFlow | None = None
     sorting_config_snapshot: str | None = None
     prev_capture_requested: bool = False
-
-    health = ComponentHealthRegistry()
 
     pid = os.getpid()
     commands: Commands | None = None
