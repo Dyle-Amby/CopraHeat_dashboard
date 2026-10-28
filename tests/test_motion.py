@@ -182,6 +182,40 @@ class TestCarriageDrivers(unittest.TestCase):
         self.assertEqual(driver.state, "moving")
         self.assertEqual(driver._move_hz, 250.0)
 
+    def test_carriage_driver_can_retry_after_explicit_fault_clear(self):
+        driver = CarriageDriver.__new__(CarriageDriver)
+        driver.order = ("LS3", "LS2", "LS1")
+        driver.bins = ("bad", "good", "great")
+        driver.default_hz = 400.0
+        driver.release_within = 400
+        driver.max_travel_steps = 6000
+        driver.stops = {"bad": "LS3", "good": "LS2", "great": "LS1"}
+        driver.bins_by_stop = {"LS3": "bad", "LS2": "good", "LS1": "great"}
+        driver.stepper = MagicMock()
+        driver.stepper.busy = False
+        driver.state = "fault"
+        driver.current_bin = "good"
+        driver.last_fault = "carriage move timed out"
+        driver._watch = None
+        driver._target_bin = None
+        driver._target_switch = None
+        driver._pending_target_bin = None
+        driver._move_hz = driver.default_hz
+        driver._limits = MagicMock()
+        driver._limits.read.return_value = {
+            "LS1": False,
+            "LS2": True,
+            "LS3": False,
+        }
+        driver._open_limits = lambda: driver._limits
+
+        driver.clear_fault()
+        self.assertTrue(driver.goto("great", hz=300.0))
+
+        self.assertEqual(driver.state, "moving")
+        self.assertEqual(driver._target_bin, "great")
+        driver.stepper.start.assert_called_once_with(6000, 300.0, forward=True)
+
     def test_carriage_driver_update_uses_active_move_hz(self):
         driver = CarriageDriver.__new__(CarriageDriver)
         driver.default_hz = 400.0

@@ -652,21 +652,37 @@ def main(argv: list[str] | None = None) -> None:
                             payload_dict = json.loads(row["payload"]) if row["payload"] else {}
                             target_bin = payload_dict.get("bin")
                             if carriage_driver:
+                                previous_fault = carriage_driver.last_fault
+                                if carriage_driver.state == "fault":
+                                    carriage_driver.clear_fault()
                                 if not carriage_driver.goto(target_bin, now=now):
+                                    fault_detail = (
+                                        f" ({carriage_driver.last_fault})"
+                                        if carriage_driver.last_fault
+                                        else ""
+                                    )
                                     raise RuntimeError(
-                                        f"carriage cannot move to {target_bin}: state is {carriage_driver.state}"
+                                        f"carriage cannot move to {target_bin}: state is "
+                                        f"{carriage_driver.state}{fault_detail}"
                                     )
                                 message = f"Carriage moving to {target_bin}"
+                                if previous_fault:
+                                    message += f" (retry after fault: {previous_fault})"
                             else:
                                 message = "No carriage driver active"
 
                         elif row["name"] == "home_carriage":
                             if carriage_driver:
+                                previous_fault = carriage_driver.last_fault
+                                if carriage_driver.state == "fault":
+                                    carriage_driver.clear_fault()
                                 if not carriage_driver.goto("bad", now=now):
                                     raise RuntimeError(
                                         f"carriage cannot home down: state is {carriage_driver.state}"
                                     )
                                 message = "Carriage homing down to the bad-bin limit"
+                                if previous_fault:
+                                    message += f" (retry after fault: {previous_fault})"
                             else:
                                 message = "No carriage driver active"
 

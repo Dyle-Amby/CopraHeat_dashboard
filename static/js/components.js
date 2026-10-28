@@ -108,6 +108,17 @@
         setText('car-stepper-last', formatOutputLast(car.last_cmd, car.last_cmd_at));
         setText('car-bin', car.current_bin ? car.current_bin.toUpperCase() : 'Unknown');
         setText('car-last-trigger', car.last_trigger ?? '—');
+        setText('carriage-state', car.state ?? 'unknown');
+        const carriageFault = document.getElementById('carriage-fault');
+        if (carriageFault) {
+            if (car.last_fault) {
+                carriageFault.textContent = `Carriage fault: ${car.last_fault}`;
+                carriageFault.classList.remove('d-none');
+            } else {
+                carriageFault.textContent = '';
+                carriageFault.classList.add('d-none');
+            }
+        }
 
         // Limit Switches
         const sw = comp.switches ?? {};

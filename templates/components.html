@@ -387,12 +387,15 @@
                     <div class="col-md-4">
                         <span class="text-muted">Current Bin Position</span><br>
                         <strong id="car-bin">—</strong>
+                        <div class="small text-muted mt-1">Carriage: <span id="carriage-state">—</span></div>
                     </div>
                     <div class="col-md-4">
                         <span class="text-muted">Last Bin Trigger</span><br>
                         <span id="car-last-trigger">—</span>
                     </div>
                 </div>
+
+                <div id="carriage-fault" class="alert alert-danger py-2 small mt-3 mb-0 d-none" role="status"></div>
 
                 <h6 class="text-muted mt-4 mb-2">Limit Switches (NC with pull-ups)</h6>
                 <div class="row g-3">
