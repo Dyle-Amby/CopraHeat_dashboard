@@ -11,6 +11,35 @@
         const banner = document.getElementById('calLockBanner');
         if (banner) banner.classList.toggle('d-none', !calibrationLocked);
         setText('btnCalibrationLockText', calibrationLocked ? 'Release Lock' : 'Acquire Lock');
+
+        const lockRequiredButtons = [
+            '#btnSaveDriverConfig',
+            '#btnAcknowledgeFresh',
+            '#btnHoldJogRev',
+            '#btnHoldJogFwd',
+            '#btnStopConveyor',
+            '#btnCustomJogRev',
+            '#btnCustomJogFwd',
+            '#btnWizardSetStart',
+            '#btnWizardRecordTrial',
+            '#btnWizardSlipCheck',
+            '#btnWizardClearTrials',
+            '#btnWizardSaveLeg',
+            '#btnWizardTestMove'
+        ];
+        lockRequiredButtons.forEach(selector => {
+            document.querySelectorAll(selector).forEach(button => {
+                const disabled = !calibrationLocked;
+                button.disabled = disabled;
+                button.title = disabled ? 'Acquire the calibration lock to enable this action.' : '';
+            });
+        });
+
+        document.querySelectorAll('[data-jog]').forEach(button => {
+            const disabled = !calibrationLocked;
+            button.disabled = disabled;
+            button.title = disabled ? 'Acquire the calibration lock to enable this nudge.' : '';
+        });
     }
 
     function setBadge(id, isResponding) {
