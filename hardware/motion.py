@@ -284,6 +284,7 @@ class CarriageDriver:
         self._watch: MoveWatch | None = None
         self._target_bin: str | None = None
         self._target_switch: str | None = None
+        self._pending_target_bin: str | None = None
         self._move_started_at: float | None = None
         self._move_steps_sent: int = 0
         self._move_hz: float = default_hz
@@ -344,11 +345,29 @@ class CarriageDriver:
             self.state = "at_target"
             return True
 
-        # Item 13: If position is unknown, home DOWN first like the bench
-        up = False
-        if current_loc is not None:
-            up = moving_up(current_loc, target_switch, order=self.order)
+        rate = hz if hz is not None and hz > 0 else self.default_hz
+        self._move_hz = rate
 
+        # Match the bench CLI: if the carriage is between stops, first home to a
+        # known switch, then continue toward the target after the first move completes.
+        if current_loc is None:
+            self._pending_target_bin = target_bin
+            self._watch = MoveWatch(
+                current_switches,
+                None,
+                order=self.order,
+                release_within=self.release_within,
+                up=False,
+            )
+            self._target_bin = None
+            self._target_switch = None
+            self.stepper.start(self.max_travel_steps, rate, forward=False)
+            self._move_started_at = time.monotonic()
+            self.state = "moving"
+            self.last_fault = None
+            return True
+
+        up = moving_up(current_loc, target_switch, order=self.order)
         self._watch = MoveWatch(
             current_switches,
             target_switch,
@@ -358,10 +377,8 @@ class CarriageDriver:
         )
         self._target_bin = target_bin
         self._target_switch = target_switch
-        rate = hz if hz is not None and hz > 0 else self.default_hz
-        self._move_hz = rate
-
-        forward = bool(up) if up is not None else False
+        self._pending_target_bin = None
+        forward = bool(up)
         self.stepper.start(self.max_travel_steps, rate, forward=forward)
         self._move_started_at = time.monotonic()
         self.state = "moving"
@@ -385,19 +402,32 @@ class CarriageDriver:
 
         if status == ARRIVED:
             self.stepper.stop()
+            if self._target_bin is None:
+                self.current_bin = self.bins_by_stop.get(detail)
+                self.state = "at_target"
+                self._watch = None
+                pending = self._pending_target_bin
+                self._pending_target_bin = None
+                if pending is not None:
+                    self.goto(pending, hz=self._move_hz, now=now)
+                return self.state
             self.state = "at_target"
             self.current_bin = self._target_bin
             self._watch = None
+            self._pending_target_bin = None
         elif status == FAULT:
             self.stepper.stop()
             self.state = "fault"
             self.last_fault = detail
             self._watch = None
+            self._pending_target_bin = None
         elif not self.stepper.busy or steps_sent >= self.max_travel_steps:
             self.stepper.stop()
             self.state = "fault"
-            self.last_fault = f"carriage move timed out after ~{steps_sent} steps without reaching {self._target_switch}"
+            target_desc = self._target_switch or "a known switch"
+            self.last_fault = f"carriage move timed out after ~{steps_sent} steps without reaching {target_desc}"
             self._watch = None
+            self._pending_target_bin = None
 
         return self.state
 
