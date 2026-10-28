@@ -286,6 +286,7 @@ class CarriageDriver:
         self._target_switch: str | None = None
         self._move_started_at: float | None = None
         self._move_steps_sent: int = 0
+        self._move_hz: float = default_hz
         self._limits = None
 
     def _open_limits(self):
@@ -319,6 +320,16 @@ class CarriageDriver:
         """Initiate non-blocking move to target bin."""
         if target_bin not in self.stops:
             raise ValueError(f"unknown bin {target_bin!r}; expected one of {self.bins}")
+
+        # A stale move can leave the object in 'moving' even though the stepper is already idle.
+        # Treat that as a recoverable restart instead of locking the carriage forever.
+        if self.state == "moving" and not self.stepper.busy:
+            self.state = "idle"
+            self._watch = None
+            self._target_bin = None
+            self._target_switch = None
+            self.last_fault = None
+
         # Item 13: After a fault, goto must not auto-retry without explicit clear_fault / prompt answer
         if self.state in ("moving", "fault"):
             return False
@@ -348,6 +359,7 @@ class CarriageDriver:
         self._target_bin = target_bin
         self._target_switch = target_switch
         rate = hz if hz is not None and hz > 0 else self.default_hz
+        self._move_hz = rate
 
         forward = bool(up) if up is not None else False
         self.stepper.start(self.max_travel_steps, rate, forward=forward)
@@ -364,8 +376,9 @@ class CarriageDriver:
         if self._watch is None or self._limits is None:
             return self.state
 
+        rate = self._move_hz if self._move_hz > 0 else self.default_hz
         elapsed = time.monotonic() - (self._move_started_at or time.monotonic())
-        steps_sent = int(elapsed * self.default_hz)
+        steps_sent = int(elapsed * rate)
 
         switches = self._limits.read()
         status, detail = self._watch.update(switches, steps_sent)
@@ -390,9 +403,11 @@ class CarriageDriver:
 
     def stop(self) -> None:
         self.stepper.stop()
-        if self.state == "moving":
+        if self.state == "moving" or self._watch is not None:
             self.state = "idle"
         self._watch = None
+        self._target_bin = None
+        self._target_switch = None
 
     def close(self) -> None:
         self.stop()

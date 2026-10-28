@@ -1,3 +1,4 @@
+import time
 import unittest
 from unittest.mock import MagicMock
 
@@ -151,6 +152,56 @@ class TestCarriageDrivers(unittest.TestCase):
         self.assertEqual(bin_found, "great")
         self.assertEqual(driver.state, "at_target")
         self.assertEqual(driver.current_bin, "great")
+
+    def test_carriage_driver_recovers_from_stale_moving_state(self):
+        driver = CarriageDriver.__new__(CarriageDriver)
+        driver.order = ("LS3", "LS2", "LS1")
+        driver.bins = ("bad", "good", "great")
+        driver.default_hz = 400.0
+        driver.release_within = 400
+        driver.max_travel_steps = 6000
+        driver.stops = {"bad": "LS3", "good": "LS2", "great": "LS1"}
+        driver.bins_by_stop = {"LS3": "bad", "LS2": "good", "LS1": "great"}
+        driver.stepper = MagicMock()
+        driver.stepper.busy = False
+        driver.state = "moving"
+        driver.current_bin = "good"
+        driver.last_fault = None
+        driver._watch = MagicMock()
+        driver._target_bin = "great"
+        driver._target_switch = "LS1"
+        driver._move_started_at = time.monotonic() - 0.5
+        driver._move_steps_sent = 0
+        driver._move_hz = 200.0
+        driver._limits = MagicMock()
+        driver._limits.read.return_value = {"LS1": False, "LS2": False, "LS3": False}
+        driver._open_limits = lambda: driver._limits
+
+        accepted = driver.goto("bad", hz=250.0)
+        self.assertTrue(accepted)
+        self.assertEqual(driver.state, "moving")
+        self.assertEqual(driver._move_hz, 250.0)
+
+    def test_carriage_driver_update_uses_active_move_hz(self):
+        driver = CarriageDriver.__new__(CarriageDriver)
+        driver.default_hz = 400.0
+        driver.max_travel_steps = 6000
+        driver._move_hz = 150.0
+        driver.state = "moving"
+        driver._move_started_at = time.monotonic() - 1.0
+        driver._watch = MagicMock()
+        driver._watch.update.return_value = ("moving", None)
+        driver._limits = MagicMock()
+        driver._limits.read.return_value = {"LS1": False, "LS2": False, "LS3": False}
+        driver.stepper = MagicMock()
+        driver.stepper.busy = True
+        driver._target_bin = "great"
+        driver._target_switch = "LS1"
+        driver.current_bin = "good"
+        driver.last_fault = None
+
+        driver.update()
+        self.assertEqual(driver._watch.update.call_args[0][1], 150)
 
 
 if __name__ == "__main__":
