@@ -85,6 +85,10 @@ window.CORDS = (function () {
     if (last) fn(last);
   }
 
+  function startLivePolling(fn) {
+    onLive(fn);
+  }
+
   function renderHeader(live) {
     const pill = document.getElementById('supervisorPill');
     const text = document.getElementById('supervisorText');
@@ -144,5 +148,5 @@ window.CORDS = (function () {
 
   document.addEventListener('DOMContentLoaded', pollLive);
 
-  return { STATE_LABELS, num, elapsed, date, alarmText, getJSON, onLive, sendCommand };
+  return { STATE_LABELS, num, elapsed, date, alarmText, getJSON, onLive, startLivePolling, sendCommand };
 })();
