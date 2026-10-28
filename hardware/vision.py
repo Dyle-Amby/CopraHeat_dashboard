@@ -135,16 +135,32 @@ class USBWebcam:
         self.height = height
         self._cap = None
 
+    def _candidate_indices(self) -> list[int]:
+        if self.camera_index is None:
+            return list(range(0, 6))
+        ordered = [self.camera_index]
+        ordered.extend(i for i in range(0, 6) if i != self.camera_index)
+        return ordered
+
     def open(self) -> bool:
         try:
             import cv2
 
-            self._cap = cv2.VideoCapture(self.camera_index)
-            if not self._cap.isOpened():
-                return False
-            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-            return True
+            for idx in self._candidate_indices():
+                cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
+                if cap is None or not cap.isOpened():
+                    try:
+                        cap = cv2.VideoCapture(idx)
+                    except Exception:
+                        cap = None
+                if cap is None or not cap.isOpened():
+                    continue
+                self._cap = cap
+                self.camera_index = idx
+                self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+                self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+                return True
+            return False
         except Exception:
             return False
 

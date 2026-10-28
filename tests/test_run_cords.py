@@ -12,6 +12,7 @@ from hardware.run_cords import (
     capture_camera_test_frame,
     save_camera_preview,
 )
+from hardware.vision import USBWebcam
 
 
 class FakeHX711:
@@ -130,6 +131,31 @@ class CameraTestReadinessTests(unittest.TestCase):
             with patch.dict("sys.modules", {"cv2": cv2}):
                 with self.assertRaisesRegex(RuntimeError, "JPEG encoding failed"):
                     save_camera_preview(object(), target)
+
+    def test_usb_webcam_falls_back_to_other_video_indices(self):
+        class FakeCapture:
+            def __init__(self, idx):
+                self.idx = idx
+                self._opened = idx == 2
+
+            def isOpened(self):
+                return self._opened
+
+            def set(self, *args, **kwargs):
+                return True
+
+        def fake_video_capture(idx, backend=None):
+            if idx == 0:
+                return FakeCapture(0)
+            if idx == 2:
+                return FakeCapture(2)
+            return FakeCapture(-1)
+
+        cv2 = SimpleNamespace(VideoCapture=fake_video_capture, CAP_V4L2=1, CAP_PROP_FRAME_WIDTH=1, CAP_PROP_FRAME_HEIGHT=2)
+        cam = USBWebcam(camera_index=0)
+        with patch.dict("sys.modules", {"cv2": cv2}):
+            self.assertTrue(cam.open())
+            self.assertEqual(cam.camera_index, 2)
 
 
 if __name__ == "__main__":
