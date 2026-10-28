@@ -831,7 +831,7 @@ def main(argv: list[str] | None = None) -> None:
                             # reverts to whatever the table held before
                             db.set_setting(conn, "target_kg", controller.target_kg)
                         print(f"{stamp()}  command {row['name']}: {message}")
-                    except (RuntimeError, ValueError) as exc:
+                    except Exception as exc:
                         db.resolve_command(conn, row["id"], db.REJECTED, str(exc))
                         print(f"{stamp()}  command {row['name']} REFUSED: {exc}")
 
