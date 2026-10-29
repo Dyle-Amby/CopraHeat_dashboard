@@ -132,16 +132,26 @@ class StepperConveyor(BaseConveyor):
     def stop(self) -> int:
         self.creeping = False
         self._moved_at = None
-        if self._was_busy or self.stepper.busy:
-            sent = self.stepper.stop()
-            self._was_busy = False
+        if not (self._was_busy or self.stepper.busy):
             self.last_result = "stopped"
+            return 0
+
+        started_at = self._started
+        sent = self.stepper.stop()
+        self._was_busy = False
+        self._started = None
+        self.last_result = "stopped"
+
+        # A stop is not a completed move. Only count partial progress when the pulse
+        # train was still actively in flight; avoid drift when the belt was already
+        # idle and a stale stop handler keeps firing.
+        stale = started_at is not None and (time.monotonic() - started_at) > 0.5
+        if not stale and sent > 0:
             if self._move_forward:
                 self.position_steps += sent
             else:
                 self.position_steps -= sent
-            return sent
-        return 0
+        return sent
 
     def update(self, now: float | None = None) -> None:
         _ = self.busy

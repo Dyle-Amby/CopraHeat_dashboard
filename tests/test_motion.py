@@ -54,6 +54,15 @@ class TestSimulatedConveyorMotion(unittest.TestCase):
         self.assertFalse(self.conveyor.move(100, hz=500.0, now=0.1))
         self.assertEqual(self.conveyor.last_result, "refused")
 
+    def test_stop_does_not_advance_position_on_idle(self):
+        self.conveyor.move(1000, hz=500.0, now=0.0)
+        self.conveyor._busy = False
+        self.conveyor._moving_until = None
+        self.conveyor._move_started_at = None
+        self.conveyor._move_steps = 0
+        self.assertEqual(self.conveyor.stop(now=0.1), 0)
+        self.assertEqual(self.conveyor.position_steps, 0)
+
     def test_stop_on_abort_or_close(self):
         # Start 1000 steps at 500 Hz
         self.conveyor.move(1000, hz=500.0, now=0.0)
