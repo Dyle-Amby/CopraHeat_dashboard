@@ -433,7 +433,7 @@
             });
         }
 
-        const holdJog = (buttonId, { direction, steps = 20000 }) => {
+        const holdJog = (buttonId, { direction, steps = 10000, hz = 3000 }) => {
             const button = document.getElementById(buttonId);
             if (!button) return;
 
@@ -441,7 +441,11 @@
 
             const sendJog = () => {
                 if (!calibrationLocked || !isHeld) return;
-                sendCommand('jog_conveyor', { steps, forward: direction === 'forward' });
+                sendCommand('jog_conveyor', {
+                    steps,
+                    hz,
+                    forward: direction === 'forward'
+                });
             };
 
             const stopHold = () => {
@@ -462,8 +466,8 @@
             });
         };
 
-        holdJog('btnHoldJogFwd', { direction: 'forward', steps: 20000 });
-        holdJog('btnHoldJogRev', { direction: 'reverse', steps: 20000 });
+        holdJog('btnHoldJogFwd', { direction: 'forward', steps: 10000, hz: 3000 });
+        holdJog('btnHoldJogRev', { direction: 'reverse', steps: 10000, hz: 3000 });
         bindCommand('btnStopConveyor', 'stop_conveyor', {});
 
         // Driver settings save
