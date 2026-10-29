@@ -74,16 +74,14 @@ DEFAULT_SETTINGS = {
     "min_confidence": "0.55",
     "blur_threshold": "100.0",
     "max_rejected_ratio": "0.40",
-    "camera_to_discharge_steps": "5000",
+    # Calibrated conveyor leg distances; existing database values take precedence.
+    "camera_to_discharge_steps": "26000",
     "discharge_total_steps": "3000",
     "safety_margin_steps": "500",
     "discharge_timeout_s": "60.0",
     "carriage_move_timeout_s": "30.0",
-    # UNCALIBRATED: 0 means the real stepper driver must refuse to run.
-    # Measure with: python -m hardware.bench jog conveyor --steps 500 --hz 400
-    # then save with: python -m hardware.run_cords --save-settings --hopper-to-chamber-steps <N>
-    "hopper_to_chamber_steps": "0",
-    "chamber_to_camera_steps": "0",
+    "hopper_to_chamber_steps": "30000",
+    "chamber_to_camera_steps": "70000",
     "conveyor_p00": "10000",
     "conveyor_hz": "2000.0",
     "conveyor_cal_stale": "0",
