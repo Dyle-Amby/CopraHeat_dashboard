@@ -19,11 +19,11 @@ class StepperPins(NamedTuple):
 
 # --- Sensors -----------------------------------------------------------------
 DS18B20_DATA = 4    # phys 7  - 1-Wire; needs dtoverlay=w1-gpio,gpiopin=4; 4.7k pull-up to 3V3 on board
-DHT22_DATA = 26     # phys 37 - 10k pull-up (check whether the breakout already has one)
+DHT22_DATA = 11     # phys 23 - SPI0 SCLK; requires SPI disabled; use a 10k pull-up to 3V3
 
 # --- Load cells --------------------------------------------------------------
 # GPIO7-11 are the SPI0 block. SPI must stay DISABLED in raspi-config,
-# otherwise the kernel claims these lines and the load cells go dead silently.
+# otherwise the kernel claims these lines, disrupting HX711s and DHT22 on GPIO11.
 HX711_HOPPER = HX711Pins(dout=7, sck=8)       # phys 26 / 24
 HX711_BIN_GREAT = HX711Pins(dout=9, sck=10)   # phys 21 / 19
 HX711_BIN_GOOD = HX711Pins(dout=15, sck=14)   # phys 10 /  8

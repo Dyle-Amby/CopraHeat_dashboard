@@ -107,7 +107,7 @@ def relay(args: argparse.Namespace) -> None:
 def watch_sensors(args: argparse.Namespace) -> None:
     from hardware import sensors
 
-    print("chamber = DS18B20 (GPIO4), exhaust = DHT22 (GPIO26, physical pin 37). '--' = no reading.")
+    print("chamber = DS18B20 (GPIO4), exhaust = DHT22 (GPIO11, physical pin 23). '--' = no reading.")
     print("DS18B20 '--': w1-gpio overlay / 4.7k pull-up. DHT22 '--': dht11 overlay / wiring.")
     while True:
         chamber = sensors.read_ds18b20()
