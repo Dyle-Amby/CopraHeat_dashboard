@@ -19,6 +19,10 @@
     <i class="bi bi-bell-fill mt-1" style="color:var(--gold); flex-shrink:0;"></i>
     <div class="flex-fill">
       <strong style="display:block; margin-bottom:6px;" id="promptMessage">Machine awaiting operator decision</strong>
+      <div id="promptReview" class="prompt-review d-none">
+        <img id="promptReviewImage" class="prompt-review-image" alt="Captured copra piece for grading">
+        <div id="promptReviewDetails" class="prompt-review-details"></div>
+      </div>
       <div id="promptOptions" class="d-flex flex-wrap gap-2"></div>
     </div>
   </div>
@@ -83,26 +87,6 @@
           <span class="stat-label">min</span>
           <button type="submit" class="btn-outline-ink" id="dryingTimerBtn">Set timer</button>
         </form>
-      </div>
-
-      <div class="override-row">
-        <div>
-          <span class="override-label">Assign bin (Review / Manual override)</span>
-          <span class="override-sub">Route carriage and discharge batch to the selected bin (used on review flag or override).</span>
-        </div>
-        <div class="d-flex gap-2">
-          <button class="btn-outline-ink cp-btn" data-command="override_grade" data-payload="great">Great</button>
-          <button class="btn-outline-ink cp-btn" data-command="override_grade" data-payload="good">Good</button>
-          <button class="btn-outline-ink cp-btn" data-command="override_grade" data-payload="bad">Bad</button>
-        </div>
-      </div>
-
-      <div class="override-row">
-        <div>
-          <span class="override-label">Finish sorting</span>
-          <span class="override-sub">Manual override: completes the sorting phase and closes the batch</span>
-        </div>
-        <button class="btn-outline-ink cp-btn" data-command="finish_sorting" data-confirm="Mark sorting as finished?">Finish sorting</button>
       </div>
 
       <div class="override-row">

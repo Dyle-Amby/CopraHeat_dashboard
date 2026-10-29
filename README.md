@@ -21,9 +21,9 @@ Intake → Drying (closed-loop, static tray) → Sorting (vision-based grading) 
 
 | Page | Description |
 |---|---|
-| **Dashboard** | Live overview polled every 2 s — phase track, heater/fan state, chamber and exhaust readings, exhaust absolute humidity (the drying endpoint signal), hopper weight vs. target, batch vision grade consensus & sample frame counts, active alarms, and any blocking prompt from the machine |
+| **Dashboard** | Live overview polled every 2 s — phase track, heater/fan state, chamber and exhaust readings, exhaust absolute humidity (the drying endpoint signal), hopper weight vs. target, per-piece sorting progress, active alarms, and the current operator prompt with image/classification details |
 | **Sensor Logs** | Per-batch time-series charts for chamber temperature, exhaust temperature, exhaust RH, exhaust absolute humidity and hopper weight, with peak / average / lowest; a running batch refreshes itself |
-| **Batch History** | Every batch with start time, total and drying time, weight in / out, post-sort weight loss, unified batch grade (`great`, `good`, `bad`, legacy, or review flag) with full sample frame breakdown tooltips; CSV export |
+| **Batch History** | Every batch with start time, total and drying time, weight in / out, post-sort weight loss, legacy batch-grade fields, and CSV export |
 | **Control Panel** | Operator commands — start, end drying (manual endpoint), manual bin assignment / review override (`great`, `good`, `bad`), finish sorting, reset, abort with a reason, target batch weight, and prompt responses such as recover vs. abort after an unclean shutdown |
 | **Components** | Maintenance and calibration page for calibration locks, conveyor jogs, carriage homing, hopper tare / scale calibration, servo checks, and component-level troubleshooting |
 
@@ -57,7 +57,7 @@ CopraHeat_dashboard/
 │   ├── pins.py             # GPIO pin map — single source of truth (BCM numbering)
 │   ├── states.py           # BatchState / ConveyorCommand — shared vocabulary
 │   ├── batch.py            # Batch state machine: Intake → Drying → Sorting + active prompt handling
-│   ├── grading.py          # Batch-level ensemble sampling, soft-voting, visual contamination guard
+│   ├── grading.py          # Vision thresholds and legacy batch-sampling utilities
 │   ├── climate.py          # Heater hysteresis + fan interlock logic (no GPIO; unit-tested)
 │   ├── hopper.py           # Hopper gate state machine + stable-weight filter (no GPIO; unit-tested)
 │   ├── drying.py           # Drying endpoint from exhaust absolute humidity (no GPIO; unit-tested)
@@ -228,7 +228,7 @@ All state lives in a SQLite database (`cords.db`, created on first run, git-igno
 |---|---|---|
 | `machine_state` | supervisor | Single-row live snapshot, including a heartbeat so the UI can tell live data from a dead process plus the current `active_prompt` payload |
 | `sensor_log` | supervisor | Time series behind the Sensor Logs charts |
-| `batches` | supervisor | One row per batch — inserted at start, updated with v3 batch-level grade consensus, operator override, review flags, sample vectors, and configuration snapshot |
+| `batches` | supervisor | One row per batch — inserted at start, updated with weights, timing, legacy grade columns, and configuration snapshot |
 | `batch_events` | supervisor | Timestamped process milestones (`batch_started`, `drying_started`, `gate_opened`, recovery / abort decisions, etc.) that keep a searchable event trail for each batch |
 | `commands` | Flask | Operator queue (`start`, `end_drying`, `override_grade`, `finish_sorting`, `abort`, `reset`, `set_target_kg`, `answer_prompt`, `clear_prompt`) with per-command results |
 | `settings` | supervisor | Calibration parameters (HX711 scale/offsets, servo angles, vision grading thresholds, belt travel steps) |
@@ -254,7 +254,7 @@ The dashboard is the operator interface for a custom copra processing machine, c
 - **Conveyor** — heat-resistant stainless steel mesh belt, driven by a 57HS82 stepper via an HBS57H driver
 - **Drying chamber** — 3× 220 V ceramic IR heater bulbs switched by a Fotek SSR, with a 60–70 °C two-point hysteresis loop on a DS18B20 probe; 24 V intake/exhaust fans switched together via a relay
 - **Exhaust sensing** — DHT22 inside the chamber by the exhaust fan; its absolute humidity is the drying endpoint signal (there is no ambient sensor)
-- **Computer-vision module** — 1080p USB webcam + MobileNetV3 (`cords_model.tflite`). During the sorting phase, the belt creeps to sample $N$ distinct positions along the batch. Consensus is calculated via soft-voting across valid frames, with a visual contamination guard forcing `Bad` if mould/char exceed threshold $\tau_{\text{bad}}$, and an operator review prompt if low confidence occurs.
+- **Computer-vision module** — 1080p USB webcam + MobileNetV3 (`cords_model.tflite`). Sorting captures one staged piece at a time; the operator reviews the image and suggested bin, can retake or choose another bin, then confirms the drop before proceeding to the next piece. Piece capture, decision, and drop-verification events are recorded with the batch.
 - **Bin carriage** — 57BYGH420 stepper via a TB6600 driver, moving vertically between three bin heights; three normally-closed limit switches act as hard position stops
 - **Bin load cells** — one HX711 per output bin; target weight loss during drying is ~43–47% (≈50% → ≤6% moisture)
 

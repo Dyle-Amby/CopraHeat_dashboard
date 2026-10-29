@@ -2,6 +2,7 @@
 document.addEventListener('DOMContentLoaded', function () {
   const C = window.CORDS;
   const $ = id => document.getElementById(id);
+  let currentDashboardPromptId = null;
 
   const PHASES = ['intake', 'drying', 'cooldown', 'sorting'];
 
@@ -10,7 +11,7 @@ document.addEventListener('DOMContentLoaded', function () {
     intake: 'Filling the hopper, then carrying the batch in',
     drying: 'Static tray, closed-loop 60–70°C',
     cooldown: 'Heaters off, fans purging heat',
-    sorting: 'Belt running past the camera',
+    sorting: 'Operator stages, grades and routes each piece',
     complete: 'Finished — reset to start another'
   };
 
@@ -69,7 +70,7 @@ document.addEventListener('DOMContentLoaded', function () {
       'batch_started', 'gate_opened', 'intake_advance_done',
       'heater_on', 'temp_60c_reached', 'fans_pulsing', 'drying_endpoint_reached',
       'cooldown_started', 'sorting_positioning_done',
-      'sample_captured', 'batch_grade_assigned', 'discharge_completed', 'weight_gain_verified'
+      'piece_captured', 'piece_reviewed', 'piece_drop_verified', 'piece_sorting_finished'
     ];
 
     function renderMilestones(events, state) {
@@ -120,16 +121,53 @@ document.addEventListener('DOMContentLoaded', function () {
 
       if (!prompt) {
         card.classList.add('d-none');
+        currentDashboardPromptId = null;
         return;
       }
+      if (currentDashboardPromptId === prompt.id) return;
+      currentDashboardPromptId = prompt.id;
 
       msgEl.textContent = prompt.message || 'Machine awaiting operator decision';
+      const review = $('dashPromptReview');
+      const reviewImage = $('dashPromptReviewImage');
+      const reviewDetails = $('dashPromptReviewDetails');
+      const context = prompt.context || {};
+      const showReview = Boolean(context.image_url || context.predicted_grade || context.scores);
+      if (review) review.classList.toggle('d-none', !showReview);
+      if (reviewImage) {
+        reviewImage.classList.toggle('d-none', !context.image_url);
+        if (context.image_url) reviewImage.src = context.image_url;
+        else reviewImage.removeAttribute('src');
+      }
+      if (reviewDetails) {
+        const prediction = context.predicted_grade || context.grade || 'No confident classification';
+        const confidence = Number.isFinite(Number(context.confidence))
+          ? ` · ${(Number(context.confidence) * 100).toFixed(1)}% confidence`
+          : '';
+        const scoreText = context.scores
+          ? Object.entries(context.scores).map(([grade, score]) => `${grade}: ${(Number(score) * 100).toFixed(1)}%`).join(' · ')
+          : '';
+        reviewDetails.textContent = [`Suggested bin: ${prediction}${confidence}`, scoreText, context.warning].filter(Boolean).join('\n');
+      }
       optEl.innerHTML = '';
       const options = prompt.options || ['confirm'];
       options.forEach(opt => {
         const btn = document.createElement('button');
         btn.className = (opt === 'abort' || opt === 'discard') ? 'btn btn-sm btn-outline-danger' : 'btn btn-sm btn-primary';
-        btn.textContent = opt.charAt(0).toUpperCase() + opt.slice(1);
+        const labels = {
+          jog_reverse: 'Jog back 250 steps',
+          jog_forward: 'Jog forward 250 steps',
+          piece_staged: 'Piece is staged',
+          accept_suggested: context.predicted_grade ? `Accept ${context.predicted_grade}` : 'Accept suggested bin',
+          bad: 'Bad bin',
+          good: 'Good bin',
+          great: 'Great bin',
+          retake: 'Retake photo',
+          yes_more: 'Yes, more copra',
+          no_more: 'No, finish sorting',
+          retry_capture: 'Retry photo',
+        };
+        btn.textContent = labels[opt] || opt.charAt(0).toUpperCase() + opt.slice(1);
         btn.addEventListener('click', async () => {
           btn.disabled = true;
           try {
@@ -178,34 +216,30 @@ document.addEventListener('DOMContentLoaded', function () {
 
     renderAlarms(live.alarms || []);
 
-    if (batch) {
-      const grade = batch.operator_grade || batch.batch_grade;
-      const badge = $('batchGradeBadge');
-      if (grade) {
-        badge.textContent = grade.toUpperCase() + (batch.override_used ? '*' : '');
-        badge.dataset.state = grade;
-      } else if (batch.needs_review) {
-        badge.textContent = 'NEEDS REVIEW';
-        badge.dataset.state = 'needs_review';
-      } else {
-        badge.textContent = '—';
-        badge.dataset.state = 'idle';
-      }
-
-      if (batch.sample_valid_n != null) {
-        $('sampleValidCount').textContent = batch.sample_valid_n;
-      }
-      if (batch.sample_total_n != null) {
-        $('sampleTotalCount').textContent = batch.sample_total_n;
-      }
-
-      if (batch.needs_review && !batch.override_used) {
-        $('sortNote').textContent = 'Flagged for review — assign bin via Control Panel';
-      } else if (batch.override_used) {
-        $('sortNote').textContent = `Operator override: ${batch.operator_grade} (Machine: ${batch.batch_grade || 'none'})`;
-      } else if (batch.batch_grade) {
-        $('sortNote').textContent = `Ensemble consensus: ${batch.batch_grade.toUpperCase()}`;
-      }
+    const pieceEvents = live.batch_events || [];
+    const countEvent = name => pieceEvents.filter(event => event.event === name).length;
+    $('pieceCapturedCount').textContent = countEvent('piece_captured');
+    $('pieceReviewedCount').textContent = countEvent('piece_reviewed');
+    $('pieceDroppedCount').textContent = countEvent('piece_drop_verified');
+    const prompt = live.active_prompt;
+    const promptContext = prompt && prompt.context ? prompt.context : {};
+    const lastPieceEvent = pieceEvents.slice().reverse().find(event => event.event.startsWith('piece_'));
+    let lastPieceDetails = lastPieceEvent ? lastPieceEvent.details : null;
+    if (typeof lastPieceDetails === 'string') {
+      try { lastPieceDetails = JSON.parse(lastPieceDetails); } catch { lastPieceDetails = null; }
+    }
+    const currentPiece = promptContext.piece || (lastPieceDetails && lastPieceDetails.piece);
+    $('pieceCurrentNumber').textContent = currentPiece || '—';
+    if (state !== 'sorting') {
+      $('pieceSortStatus').textContent = state === 'complete' ? 'Sorting complete.' : 'Sorting starts after cooldown.';
+    } else if (prompt && prompt.id.startsWith('stage_piece_')) {
+      $('pieceSortStatus').textContent = 'Awaiting one-piece staging.';
+    } else if (prompt && prompt.id.startsWith('piece_review_')) {
+      $('pieceSortStatus').textContent = 'Awaiting piece grade confirmation.';
+    } else if (prompt && prompt.id.startsWith('more_pieces_')) {
+      $('pieceSortStatus').textContent = 'Awaiting next-piece decision.';
+    } else {
+      $('pieceSortStatus').textContent = 'Sorting in progress.';
     }
   });
 });

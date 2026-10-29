@@ -14,7 +14,7 @@ class TestSortingFlow(unittest.TestCase):
     def setUp(self):
         self.flow = SortingFlow(
             chamber_to_camera_steps=2000,
-            discharge_total_steps=3000,
+            camera_to_discharge_steps=1500,
             sample_hz=400.0,
             conveyor_hz=1600.0,
             settle_s=0.3,
@@ -39,12 +39,12 @@ class TestSortingFlow(unittest.TestCase):
         self.assertIsNotNone(flow.active_prompt)
         self.assertEqual(flow.active_prompt.id, "position_uncalibrated")
 
-        # Answer prompt with override -> enters SAMPLE
+        # Answer prompt with override -> enters operator staging
         answered = flow.answer_prompt("override", now=101.0)
         self.assertTrue(answered)
-        self.assertEqual(flow.stage, SortingStage.SAMPLE)
+        self.assertEqual(flow.stage, SortingStage.STAGE_PIECE)
 
-    def test_position_normal_transition_to_sample(self):
+    def test_position_stops_for_operator_staging(self):
         # Tick 1: Initiates position move
         self.flow.update(now=100.0, conveyor_busy=False)
         self.assertEqual(self.flow.conveyor_move_steps, 2000)
@@ -55,10 +55,10 @@ class TestSortingFlow(unittest.TestCase):
         self.flow.update(now=101.0, conveyor_busy=True)
         self.assertEqual(self.flow.stage, SortingStage.POSITION)
 
-        # Tick 3: Conveyor done, copra verified present
+        # Tick 3: Conveyor done; wait for operator to isolate one piece.
         self.flow.update(now=105.0, conveyor_busy=False, conveyor_last_result="done", copra_present=True)
-        self.assertEqual(self.flow.stage, SortingStage.SAMPLE)
-        self.assertIsNone(self.flow.active_prompt)
+        self.assertEqual(self.flow.stage, SortingStage.STAGE_PIECE)
+        self.assertEqual(self.flow.active_prompt.id, "stage_piece_1")
 
     def test_position_empty_belt_raises_prompt(self):
         # Tick 1: Start move
@@ -71,50 +71,104 @@ class TestSortingFlow(unittest.TestCase):
 
         # Operator chooses proceed anyway
         self.flow.answer_prompt("proceed_anyway", now=106.0)
-        self.assertEqual(self.flow.stage, SortingStage.SAMPLE)
+        self.assertEqual(self.flow.stage, SortingStage.STAGE_PIECE)
 
-    def test_sample_stage_jog_settle_capture_cycle(self):
-        # Move directly to sample stage
+    def test_stage_settle_and_capture_cycle(self):
         self.flow.stage = SortingStage.SAMPLE
         self.flow.stage_entered_at = 100.0
+        self.flow._sample_move_completed_at = 100.0
 
-        # Tick 1: Initial sample point (position 0) -> move_started, completed_at set
+        # Wait for the short settle interval after operator staging.
         self.flow.update(now=100.0, conveyor_busy=False)
         self.assertFalse(self.flow.capture_requested)
-
-        # Tick 2: During settle time (< 0.3s)
-        self.flow.update(now=100.1, conveyor_busy=False)
-        self.assertFalse(self.flow.capture_requested)
-
-        # Tick 3: Settle delay elapsed (0.3s) -> capture requested!
         self.flow.update(now=100.35, conveyor_busy=False)
         self.assertTrue(self.flow.capture_requested)
 
-        # Tick 4: Feed valid capture frame vector [bad, good, great]
         fake_vec = [0.05, 0.15, 0.80]  # clearly great
         self.flow.update(now=100.4, conveyor_busy=False, frame_vector=fake_vec)
         self.assertFalse(self.flow.capture_requested)
-        self.assertEqual(self.flow.sampler.sample_valid_n, 1)
+        self.assertEqual(self.flow.stage, SortingStage.REVIEW)
+        self.assertEqual(self.flow.active_prompt.id, "piece_review_1_1")
+        self.assertEqual(self.flow.piece_prediction["grade"], "great")
 
-    def test_sample_completion_moves_to_carriage(self):
+    def test_single_piece_capture_waits_for_operator_review(self):
         flow = SortingFlow(
-            config={"n_samples": 4, "min_valid": 2, "max_attempts": 10, "steps_per_sample": 100},
-            settle_s=0.1,
+            config={"n_samples": 1, "min_valid": 1, "max_attempts": 1},
+            chamber_to_camera_steps=2000,
+            camera_to_discharge_steps=1500,
+            conveyor_hz=1600.0,
+            sample_hz=400.0,
         )
         flow.start(now=100.0)
         flow.stage = SortingStage.SAMPLE
-        flow.stage_entered_at = 100.0
 
-        now = 100.0
-        while flow.stage is SortingStage.SAMPLE and now < 200.0:
-            flow.update(now=now, conveyor_busy=False)
-            if flow.capture_requested:
-                flow.update(now=now, conveyor_busy=False, frame_vector=[0.05, 0.15, 0.80])
-            now += 0.2
+        flow.update(now=100.0, conveyor_busy=False)
+        flow.update(now=100.35, conveyor_busy=False)
+        self.assertTrue(flow.capture_requested)
 
-        self.assertEqual(flow.stage, SortingStage.CARRIAGE)
-        self.assertEqual(flow.batch_grade, "great")
-        self.assertIsNone(flow.active_prompt)
+        flow.update(
+            now=100.4,
+            conveyor_busy=False,
+            frame_vector=[0.05, 0.15, 0.80],
+            capture_done=True,
+        )
+
+        self.assertEqual(flow.stage, SortingStage.REVIEW)
+        self.assertEqual(flow.active_prompt.id, "piece_review_1_1")
+        self.assertEqual(flow.conveyor_command, ConveyorCommand.STOP)
+
+    def test_retake_keeps_piece_at_camera_for_another_review(self):
+        flow = SortingFlow(
+            chamber_to_camera_steps=2000,
+            camera_to_discharge_steps=1500,
+        )
+        flow.start(now=100.0)
+        flow.stage = SortingStage.REVIEW
+        flow.piece_prediction = {"grade": "good", "confidence": 0.8}
+        flow.active_prompt = Prompt(
+            id="piece_review_1", message="review", options=["retake"], created_at=100.0
+        )
+        self.assertTrue(flow.answer_prompt("retake", now=101.0))
+        self.assertEqual(flow.stage, SortingStage.SAMPLE)
+        self.assertEqual(flow.conveyor_move_steps, 0)
+
+    def test_operator_bin_choice_becomes_carriage_target(self):
+        flow = SortingFlow(chamber_to_camera_steps=2000, camera_to_discharge_steps=1500)
+        flow.start(now=100.0)
+        flow.stage = SortingStage.REVIEW
+        flow.piece_prediction = {"grade": "good", "confidence": 0.8, "scores": {"good": 0.8}}
+        flow.active_prompt = Prompt(
+            id="piece_review_1_1", message="review", options=["bad"], created_at=100.0
+        )
+
+        self.assertTrue(flow.answer_prompt("bad", now=101.0))
+        flow.update(now=102.0, conveyor_busy=False, carriage_state="moving")
+
+        self.assertEqual(flow.piece_grade, "bad")
+        self.assertEqual(flow.carriage_target, "bad")
+
+    def test_more_pieces_loops_back_to_next_operator_staging_prompt(self):
+        flow = SortingFlow(chamber_to_camera_steps=2000, camera_to_discharge_steps=1500)
+        flow.start(now=100.0)
+        flow._more_pieces_prompt(100.0)
+
+        self.assertTrue(flow.answer_prompt("yes_more", now=101.0))
+
+        self.assertEqual(flow.piece_number, 2)
+        self.assertEqual(flow.stage, SortingStage.STAGE_PIECE)
+        self.assertEqual(flow.active_prompt.id, "stage_piece_2")
+
+    def test_bin_settle_uses_ten_seconds_by_default(self):
+        self.assertEqual(SortingFlow().bin_settle_s, 10.0)
+
+    def test_missing_camera_to_drop_calibration_prompts_without_moving(self):
+        flow = SortingFlow(camera_to_discharge_steps=0)
+        flow.stage = SortingStage.DISCHARGE
+
+        flow.update(now=100.0, conveyor_busy=False)
+
+        self.assertEqual(flow.active_prompt.id, "discharge_uncalibrated")
+        self.assertEqual(flow.conveyor_move_steps, 0)
 
     def test_carriage_timeout_raises_prompt(self):
         self.flow.stage = SortingStage.CARRIAGE
@@ -158,7 +212,7 @@ class TestSortingFlow(unittest.TestCase):
 
         # Tick 1: Starts discharge conveyor move
         self.flow.update(now=100.0, conveyor_busy=False)
-        self.assertEqual(self.flow.conveyor_move_steps, 3000)
+        self.assertEqual(self.flow.conveyor_move_steps, 1500)
 
         # Tick 2: Move done -> enters VERIFY
         self.flow.update(now=108.0, conveyor_busy=False, conveyor_last_result="done", bin_kg=10.0)
@@ -167,8 +221,8 @@ class TestSortingFlow(unittest.TestCase):
         # Tick 3: Scale settles and records 5 stable readings within 0.03 kg (Item 8)
         for t in (109.1, 109.2, 109.3, 109.4, 109.5):
             self.flow.update(now=t, conveyor_busy=False, bin_kg=10.50)
-        self.assertEqual(self.flow.stage, SortingStage.DONE)
-        self.assertTrue(self.flow.is_complete)
+        self.assertEqual(self.flow.stage, SortingStage.MORE_PIECES)
+        self.assertFalse(self.flow.is_complete)
         self.assertAlmostEqual(self.flow.weight_out_kg, 0.50)
 
     def test_verify_no_weight_rise_raises_prompt(self):
@@ -182,10 +236,10 @@ class TestSortingFlow(unittest.TestCase):
         self.assertIsNotNone(self.flow.active_prompt)
         self.assertEqual(self.flow.active_prompt.id, "bin_did_not_gain_weight")
 
-        # Operator overrides weight check (Item 8: weight_out_kg is left None, never 0.0)
+        # Operator records the drop as unverified, then may continue the batch.
         self.flow.answer_prompt("override", now=107.0)
-        self.assertEqual(self.flow.stage, SortingStage.DONE)
-        self.assertTrue(self.flow.is_complete)
+        self.assertEqual(self.flow.stage, SortingStage.MORE_PIECES)
+        self.assertFalse(self.flow.is_complete)
         self.assertIsNone(self.flow.weight_out_kg)
 
 

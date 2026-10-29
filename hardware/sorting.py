@@ -1,14 +1,16 @@
-"""State machine for copra sorting, visual sampling, carriage dispatch, and discharge verification.
+"""Operator-led per-piece sorting, carriage dispatch, and discharge verification.
 
 Pure logic, GPIO-free, fully unit-testable.
 Stages:
-    POSITION  -> move chamber mid to camera point (chamber_to_camera_steps), wait done, verify copra visible
-    SAMPLE    -> jog steps_per_sample, wait done, wait settle timer (no sleep), capture; repeat until grade_ready
-    REVIEW    -> wait for operator review only if sampler.needs_review is True
+    POSITION    -> move the batch to camera point once, then stop
+    STAGE_PIECE -> wait for operator to isolate one piece; allow bounded jogs
+    SAMPLE      -> capture one image and wait for operator review
+    REVIEW      -> accept suggested bin, choose another, or retake in place
     CARRIAGE  -> goto target bin, wait at_target, prompt on timeout or fault
-    DISCHARGE -> move discharge_total_steps, wait done, prompt on timeout/stall
-    VERIFY    -> wait for bin scale stable weight rise over baseline; prompt if no weight gain
-    DONE      -> sorting complete
+    DISCHARGE -> move camera_to_discharge_steps for this piece
+    VERIFY    -> wait 10 s, then verify stable bin weight rise
+    MORE_PIECES -> ask operator whether to stage another piece or finish
+    DONE      -> operator finished sorting
 """
 
 from dataclasses import dataclass, field
@@ -17,16 +19,19 @@ import math
 from typing import Any, Sequence
 
 from hardware.states import ConveyorCommand
-from hardware.grading import DEFAULT_GRADING_CONFIG, SortingSampler, decide_grade
+from hardware.grading import DEFAULT_GRADING_CONFIG, SortingSampler
 
 
 class SortingStage(str, Enum):
     POSITION = "position"
+    STAGE_PIECE = "stage_piece"
+    STAGE_JOG = "stage_jog"
     SAMPLE = "sample"
     REVIEW = "review"
     CARRIAGE = "carriage"
     DISCHARGE = "discharge"
     VERIFY = "verify"
+    MORE_PIECES = "more_pieces"
     DONE = "done"
 
 
@@ -54,13 +59,13 @@ class SortingFlow:
 
     config: dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_GRADING_CONFIG))
     chamber_to_camera_steps: int = 0
-    discharge_total_steps: int = 0
+    camera_to_discharge_steps: int = 0
     camera_timeout_s: float = 10.0
     sample_hz: float = 400.0
     conveyor_hz: float = 400.0
     settle_s: float = 0.3
-    bin_settle_s: float = 2.0
-    bin_verify_timeout_s: float = 15.0
+    bin_settle_s: float = 10.0
+    bin_verify_timeout_s: float = 30.0
     min_weight_rise_kg: float = 0.05
     carriage_move_timeout_s: float = 30.0
     discharge_timeout_s: float = 60.0
@@ -70,7 +75,6 @@ class SortingFlow:
         # Override config attributes if explicitly supplied
         cfg = dict(DEFAULT_GRADING_CONFIG)
         cfg.update(self.config)
-        cfg["discharge_total_steps"] = self.discharge_total_steps
         cfg["sample_hz"] = self.sample_hz
         cfg["settle_s"] = self.settle_s
         cfg["carriage_move_timeout_s"] = self.carriage_move_timeout_s
@@ -81,6 +85,14 @@ class SortingFlow:
         self.stage_entered_at: float = 0.0
         self.active_prompt: Prompt | None = None
         self.alarms: set[str] = set()
+        self.piece_number = 1
+        self.piece_attempt = 0
+        self.piece_grade: str | None = None
+        self.piece_prediction: dict[str, Any] | None = None
+        self.piece_events: list[tuple[str, dict[str, Any]]] = []
+        self._stage_jog_started = False
+        self._stage_jog_started_at: float | None = None
+        self._stage_jog_forward = True
 
         # POSITION stage internal tracking
         self._position_move_started: bool = False
@@ -115,6 +127,7 @@ class SortingFlow:
         self.conveyor_command: ConveyorCommand = ConveyorCommand.STOP
         self.conveyor_move_steps: int = 0
         self.conveyor_move_hz: float = 400.0
+        self.conveyor_move_forward: bool = True
         self.is_complete: bool = False
 
     def start(self, now: float) -> None:
@@ -125,6 +138,14 @@ class SortingFlow:
         self.stage_entered_at = now
         self.active_prompt = None
         self.alarms.clear()
+        self.piece_number = 1
+        self.piece_attempt = 0
+        self.piece_grade = None
+        self.piece_prediction = None
+        self.piece_events.clear()
+        self._stage_jog_started = False
+        self._stage_jog_started_at = None
+        self._stage_jog_forward = True
         self._position_move_started = False
         self._position_move_done = False
         self._position_move_started_at = None
@@ -165,29 +186,132 @@ class SortingFlow:
 
         prompt_id = self.active_prompt.id
 
-        if prompt_id == "position_uncalibrated":
-            if action == "override":
+        if prompt_id.startswith("stage_piece_"):
+            if action == "piece_staged":
                 self.active_prompt = None
                 self.stage = SortingStage.SAMPLE
                 self.stage_entered_at = now
+                self._waiting_capture = False
+                self.capture_requested = False
+                self._capture_requested_at = None
+                self._sample_move_completed_at = now
                 return True
-            elif action == "abort":
+            if action in ("jog_forward", "jog_reverse"):
+                self.active_prompt = None
+                self.stage = SortingStage.STAGE_JOG
+                self.stage_entered_at = now
+                self._stage_jog_started = False
+                self._stage_jog_started_at = None
+                self._stage_jog_forward = action == "jog_forward"
+                return True
+            if action == "abort":
                 self.active_prompt = None
                 self.alarms.add("aborted")
                 return True
 
+        if prompt_id.startswith("piece_review_"):
+            if action == "retake":
+                self.active_prompt = None
+                self.stage = SortingStage.SAMPLE
+                self.stage_entered_at = now
+                self._waiting_capture = False
+                self.capture_requested = False
+                self._capture_requested_at = None
+                self.piece_prediction = None
+                self._sample_move_completed_at = now
+                return True
+            if action == "accept_suggested":
+                if not self.piece_prediction or self.piece_prediction.get("grade") not in ("bad", "good", "great"):
+                    return False
+                selected_grade = self.piece_prediction["grade"]
+            elif action in ("bad", "good", "great"):
+                selected_grade = action
+            elif action == "abort":
+                self.active_prompt = None
+                self.alarms.add("aborted")
+                return True
+            else:
+                return False
+
+            self.piece_grade = selected_grade
+            self.piece_events.append(("piece_reviewed", {
+                "piece": self.piece_number,
+                "attempt": self.piece_attempt,
+                "predicted_grade": self.piece_prediction.get("grade") if self.piece_prediction else None,
+                "selected_grade": selected_grade,
+                "confidence": self.piece_prediction.get("confidence") if self.piece_prediction else None,
+                "scores": self.piece_prediction.get("scores") if self.piece_prediction else None,
+                "image_url": self.piece_prediction.get("image_url") if self.piece_prediction else None,
+            }))
+            self.active_prompt = None
+            self.stage = SortingStage.CARRIAGE
+            self.stage_entered_at = now
+            self._carriage_move_started_at = None
+            return True
+
+        if prompt_id.startswith("more_pieces_"):
+            if action in ("yes_more", "more"):
+                self.piece_number += 1
+                self.piece_attempt = 0
+                self.piece_grade = None
+                self.piece_prediction = None
+                self.active_prompt = None
+                self.stage = SortingStage.STAGE_PIECE
+                self.stage_entered_at = now
+                self.baseline_bin_kg = None
+                self._verify_started_at = None
+                self._verify_readings = []
+                self._carriage_move_started_at = None
+                self.carriage_target = None
+                self._discharge_move_started = False
+                self._discharge_move_started_at = None
+                self._discharge_started_at = None
+                self._stage_piece_prompt(now)
+                return True
+            if action in ("no_more", "done"):
+                self.active_prompt = None
+                self.stage = SortingStage.DONE
+                self.is_complete = True
+                self.piece_events.append(("piece_sorting_finished", {"pieces": self.piece_number}))
+                return True
+            if action == "abort":
+                self.active_prompt = None
+                self.alarms.add("aborted")
+                return True
+
+        if prompt_id.startswith("stage_jog_failed_"):
+            if action == "retry":
+                self.active_prompt = None
+                self.stage = SortingStage.STAGE_JOG
+                self._stage_jog_started = False
+                self._stage_jog_started_at = None
+                return True
+            if action == "abort":
+                self.active_prompt = None
+                self.alarms.add("aborted")
+                return True
+
+        if prompt_id == "position_uncalibrated":
+            if action == "override":
+                self.active_prompt = None
+                self.stage = SortingStage.STAGE_PIECE
+                self.stage_entered_at = now
+                self._stage_piece_prompt(now)
+                return True
+            if action == "abort":
+                self.active_prompt = None
+                self.alarms.add("aborted")
+                return True
         elif prompt_id == "discharge_uncalibrated":
             if action == "override":
                 self.active_prompt = None
-                self.stage = SortingStage.VERIFY
-                self.stage_entered_at = now
-                self._verify_started_at = now
+                self.piece_events.append(("piece_drop_unverified", {"piece": self.piece_number}))
+                self._more_pieces_prompt(now)
                 return True
-            elif action == "abort":
+            if action == "abort":
                 self.active_prompt = None
                 self.alarms.add("aborted")
                 return True
-
         elif prompt_id == "positioning_stall":
             if action == "retry":
                 self.active_prompt = None
@@ -195,71 +319,36 @@ class SortingFlow:
                 self._position_move_started_at = None
                 self.stage_entered_at = now
                 return True
-            elif action == "abort":
+            if action == "abort":
                 self.active_prompt = None
                 self.alarms.add("aborted")
                 return True
-
-        elif prompt_id == "camera_timeout":
-            if action == "retry_capture":
-                self.active_prompt = None
-                self._waiting_capture = False
-                self.capture_requested = False
-                self._capture_requested_at = None
-                return True
-            elif action == "skip_sample":
-                self.active_prompt = None
-                self.sampler.record_capture(None)
-                self._waiting_capture = False
-                self.capture_requested = False
-                self._capture_requested_at = None
-                self._sample_move_started = False
-                self._sample_move_completed_at = None
-                return True
-            elif action == "abort":
-                self.active_prompt = None
-                self.alarms.add("aborted")
-                return True
-
         elif prompt_id == "empty_belt_detected":
             if action in ("proceed_anyway", "proceed"):
                 self.active_prompt = None
-                self.stage = SortingStage.SAMPLE
+                self.stage = SortingStage.STAGE_PIECE
                 self.stage_entered_at = now
+                self._stage_piece_prompt(now)
                 return True
-            elif action == "retry_position":
+            if action == "retry_position":
                 self.active_prompt = None
                 self._position_move_started = False
                 self._position_move_started_at = None
                 self.stage_entered_at = now
                 return True
-            elif action == "abort":
+            if action == "abort":
                 self.active_prompt = None
                 self.alarms.add("aborted")
                 return True
-
-        elif prompt_id == "sorting_needs_review":
-            if action in ("bad", "good", "great"):
-                self.active_prompt = None
-                self.sampler.operator_grade = action
-                self.stage = SortingStage.CARRIAGE
-                self.stage_entered_at = now
-                return True
-            elif action == "abort":
-                self.active_prompt = None
-                self.alarms.add("aborted")
-                return True
-
         elif prompt_id == "carriage_fault":
             if action == "retry":
                 self.active_prompt = None
                 self._carriage_move_started_at = None
                 return True
-            elif action == "abort":
+            if action == "abort":
                 self.active_prompt = None
                 self.alarms.add("aborted")
                 return True
-
         elif prompt_id == "discharge_timeout":
             if action == "retry":
                 self.active_prompt = None
@@ -267,25 +356,23 @@ class SortingFlow:
                 self._discharge_move_started_at = None
                 self.stage_entered_at = now
                 return True
-            elif action == "proceed_to_verify":
+            if action == "proceed_to_verify":
                 self.active_prompt = None
                 self.stage = SortingStage.VERIFY
                 self.stage_entered_at = now
                 self._verify_started_at = now
                 return True
-            elif action == "abort":
+            if action == "abort":
                 self.active_prompt = None
                 self.alarms.add("aborted")
                 return True
-
         elif prompt_id == "bin_did_not_gain_weight":
             if action == "override":
                 self.active_prompt = None
-                # Never set 0.0 on an override; leave None
-                self.stage = SortingStage.DONE
-                self.is_complete = True
+                self.piece_events.append(("piece_drop_unverified", {"piece": self.piece_number}))
+                self._more_pieces_prompt(now)
                 return True
-            elif action == "retry_discharge":
+            if action == "retry_discharge":
                 self.active_prompt = None
                 self.stage = SortingStage.DISCHARGE
                 self.stage_entered_at = now
@@ -294,12 +381,36 @@ class SortingFlow:
                 self._discharge_started_at = None
                 self._verify_readings = []
                 return True
-            elif action == "abort":
+            if action == "abort":
                 self.active_prompt = None
                 self.alarms.add("aborted")
                 return True
 
         return False
+
+    def _stage_piece_prompt(self, now: float) -> None:
+        self.active_prompt = Prompt(
+            id=f"stage_piece_{self.piece_number}",
+            message=f"Stage piece {self.piece_number}: clear the camera view so only one piece is at the camera point, then confirm.",
+            options=["jog_reverse", "jog_forward", "piece_staged", "abort"],
+            created_at=now,
+            context={"piece": self.piece_number, "jog_step_limit": 250},
+        )
+
+    def _more_pieces_prompt(self, now: float) -> None:
+        self.stage = SortingStage.MORE_PIECES
+        self.stage_entered_at = now
+        self.active_prompt = Prompt(
+            id=f"more_pieces_{self.piece_number}",
+            message="The piece has been dropped and the bin scale has settled. Is there more copra to sort?",
+            options=["yes_more", "no_more"],
+            created_at=now,
+            context={"piece": self.piece_number},
+        )
+
+    def drain_piece_events(self) -> list[tuple[str, dict[str, Any]]]:
+        events, self.piece_events = self.piece_events, []
+        return events
 
     def update(
         self,
@@ -314,6 +425,7 @@ class SortingFlow:
         operator_grade: str | None = None,
         copra_present: bool = True,
         frame_vector: Sequence[float] | None = None,
+        capture_result: dict[str, Any] | None = None,
         capture_done: bool = False,
     ) -> None:
         """Advance sorting state machine for one supervisor tick."""
@@ -336,6 +448,126 @@ class SortingFlow:
 
         # If a blocking prompt is waiting for operator, hold machine safely
         if self.active_prompt is not None:
+            self.conveyor_command = ConveyorCommand.STOP
+            self.conveyor_move_steps = 0
+            self.capture_requested = False
+            return
+
+        if self.stage is SortingStage.STAGE_PIECE:
+            if self.active_prompt is None:
+                self._stage_piece_prompt(now)
+            self.conveyor_command = ConveyorCommand.STOP
+            self.conveyor_move_steps = 0
+            self.capture_requested = False
+            return
+
+        if self.stage is SortingStage.STAGE_JOG:
+            if not self._stage_jog_started:
+                self._stage_jog_started = True
+                self._stage_jog_started_at = now
+                self.conveyor_command = ConveyorCommand.SORT_CREEP
+                self.conveyor_move_steps = 250
+                self.conveyor_move_hz = self.conveyor_hz
+                self.conveyor_move_forward = self._stage_jog_forward
+                return
+            jog_age = now - (self._stage_jog_started_at or now)
+            if conveyor_busy or jog_age < 0.15:
+                self.conveyor_command = ConveyorCommand.SORT_CREEP
+                self.conveyor_move_steps = 0
+                return
+            if conveyor_last_result != "done":
+                self.active_prompt = Prompt(
+                    id=f"stage_jog_failed_{self.piece_number}",
+                    message=f"Staging jog failed ({conveyor_last_result}). Retry or stop staging.",
+                    options=["retry", "abort"],
+                    created_at=now,
+                    context={"piece": self.piece_number},
+                )
+                self.conveyor_command = ConveyorCommand.STOP
+                self.conveyor_move_steps = 0
+                return
+            self.stage = SortingStage.STAGE_PIECE
+            self.stage_entered_at = now
+            self._stage_jog_started = False
+            self._stage_jog_started_at = None
+            self.conveyor_move_forward = True
+            self._stage_piece_prompt(now)
+            self.conveyor_command = ConveyorCommand.STOP
+            self.conveyor_move_steps = 0
+            return
+
+        if self.stage is SortingStage.SAMPLE:
+            self.conveyor_command = ConveyorCommand.STOP
+            self.conveyor_move_steps = 0
+            self.conveyor_move_forward = True
+            if self._sample_move_completed_at is not None and now - self._sample_move_completed_at < self.settle_s:
+                self.capture_requested = False
+                return
+            if not self._waiting_capture:
+                self._waiting_capture = True
+                self._capture_requested_at = now
+                self.capture_requested = True
+                return
+            if capture_done or capture_result is not None or frame_vector is not None:
+                prediction = dict(capture_result or {})
+                if frame_vector is not None and not prediction.get("scores"):
+                    scores = dict(zip(("bad", "good", "great"), frame_vector))
+                    grade = max(scores, key=scores.get)
+                    prediction.update(grade=grade, confidence=scores[grade], scores=scores)
+                self.piece_prediction = prediction
+                self.piece_attempt += 1
+                options = ["accept_suggested", "bad", "good", "great", "retake", "abort"]
+                if not prediction.get("grade"):
+                    options.remove("accept_suggested")
+                image_url = prediction.get("image_url")
+                self.active_prompt = Prompt(
+                    id=f"piece_review_{self.piece_number}_{self.piece_attempt}",
+                    message=f"Review piece {self.piece_number}: accept the suggested bin, choose another, or retake the photo.",
+                    options=options,
+                    created_at=now,
+                    context={"piece": self.piece_number, **prediction, "image_url": image_url},
+                )
+                self.stage = SortingStage.REVIEW
+                self.stage_entered_at = now
+                self.capture_requested = False
+                self._waiting_capture = False
+                self._capture_requested_at = None
+                self.piece_events.append(("piece_captured", {
+                    "piece": self.piece_number,
+                    "attempt": self.piece_attempt,
+                    "predicted_grade": prediction.get("grade"),
+                    "confidence": prediction.get("confidence"),
+                    "scores": prediction.get("scores"),
+                    "image_url": image_url,
+                }))
+                return
+            if self._capture_requested_at is not None and now - self._capture_requested_at > self.camera_timeout_s:
+                self.active_prompt = Prompt(
+                    id=f"piece_camera_timeout_{self.piece_number}",
+                    message="Camera capture failed. Check the camera and retry this piece.",
+                    options=["retry_capture", "abort"],
+                    created_at=now,
+                    context={"piece": self.piece_number},
+                )
+                self.alarms.add("camera_timeout")
+                self.capture_requested = False
+            return
+
+        if self.stage is SortingStage.REVIEW:
+            self.conveyor_command = ConveyorCommand.STOP
+            self.conveyor_move_steps = 0
+            self.capture_requested = False
+            return
+
+        if self.stage is SortingStage.MORE_PIECES:
+            if self.active_prompt is None:
+                self.active_prompt = Prompt(
+                    id=f"more_pieces_{self.piece_number}",
+                    message="The piece has been dropped and the bin scale has settled. Is there more copra to sort?",
+                    options=["yes_more", "no_more"],
+                    created_at=now,
+                    context={"piece": self.piece_number},
+                )
             self.conveyor_command = ConveyorCommand.STOP
             self.conveyor_move_steps = 0
             self.capture_requested = False
@@ -401,11 +633,10 @@ class SortingFlow:
                 )
                 return
 
-            # Copra verified at camera point -> advance to SAMPLE stage
-            self.stage = SortingStage.SAMPLE
+            # Stop at the camera point and let the operator isolate one piece.
+            self.stage = SortingStage.STAGE_PIECE
             self.stage_entered_at = now
-            self._sample_move_started = False
-            self._waiting_capture = False
+            self._stage_piece_prompt(now)
             self.conveyor_command = ConveyorCommand.STOP
             self.conveyor_move_steps = 0
             return
@@ -563,7 +794,7 @@ class SortingFlow:
             self.conveyor_command = ConveyorCommand.STOP
             self.conveyor_move_steps = 0
 
-            target = effective_grade or "good"
+            target = self.piece_grade or effective_grade or "good"
             self.carriage_target = target
 
             if self._carriage_move_started_at is None:
@@ -593,10 +824,10 @@ class SortingFlow:
         # ---------------------------------------------------------------------
         elif self.stage is SortingStage.DISCHARGE:
             self.capture_requested = False
-            if self.discharge_total_steps <= 0:
+            if self.camera_to_discharge_steps <= 0:
                 self.active_prompt = Prompt(
                     id="discharge_uncalibrated",
-                    message="Discharge total steps is 0 (uncalibrated). Calibrate in /components or override.",
+                    message="Camera-to-drop distance is 0 (uncalibrated). Calibrate in /components or override.",
                     options=["override", "abort"],
                     created_at=now,
                 )
@@ -608,7 +839,7 @@ class SortingFlow:
                 self._discharge_started_at = now
                 self._discharge_move_started_at = now
                 self.conveyor_command = ConveyorCommand.SORT_CREEP
-                self.conveyor_move_steps = self.discharge_total_steps
+                self.conveyor_move_steps = self.camera_to_discharge_steps
                 self.conveyor_move_hz = self.conveyor_hz
                 return
 
@@ -699,9 +930,13 @@ class SortingFlow:
                     stable_val = sum(window) / len(window)
                     weight_rise = max(0.0, stable_val - self.baseline_bin_kg)
                     if weight_rise >= self.min_weight_rise_kg:
-                        self.weight_out_kg = weight_rise
-                        self.stage = SortingStage.DONE
-                        self.is_complete = True
+                        self.weight_out_kg = (self.weight_out_kg or 0.0) + weight_rise
+                        self.piece_events.append(("piece_drop_verified", {
+                            "piece": self.piece_number,
+                            "grade": self.piece_grade,
+                            "weight_kg": weight_rise,
+                        }))
+                        self._more_pieces_prompt(now)
                         return
 
             # If elapsed past verification timeout without stable weight rise

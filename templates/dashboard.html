@@ -75,6 +75,10 @@
     </div>
     <div id="dashPromptOptions" class="d-flex gap-2"></div>
   </div>
+  <div id="dashPromptReview" class="prompt-review d-none">
+    <img id="dashPromptReviewImage" class="prompt-review-image" alt="Captured copra piece for grading">
+    <div id="dashPromptReviewDetails" class="prompt-review-details"></div>
+  </div>
 </div>
 
 <!-- Phase 6: Batch Milestone Flow Checklist -->
@@ -112,10 +116,10 @@
     <!-- Stage 4: Sorting & Discharge -->
     <div class="col-md-3">
       <div class="fw-bold text-muted mb-2"><i class="bi bi-eye"></i> 4. SORTING</div>
-      <div class="milestone-item mb-1" id="m-sample_captured"><i class="bi bi-circle text-muted me-1"></i> Vision Slices Graded</div>
-      <div class="milestone-item mb-1" id="m-batch_grade_assigned"><i class="bi bi-circle text-muted me-1"></i> Batch Grade Assigned</div>
-      <div class="milestone-item mb-1" id="m-discharge_completed"><i class="bi bi-circle text-muted me-1"></i> Discharge Completed</div>
-      <div class="milestone-item" id="m-weight_gain_verified"><i class="bi bi-circle text-muted me-1"></i> Weight Gain Verified</div>
+      <div class="milestone-item mb-1" id="m-piece_captured"><i class="bi bi-circle text-muted me-1"></i> Piece Image Captured</div>
+      <div class="milestone-item mb-1" id="m-piece_reviewed"><i class="bi bi-circle text-muted me-1"></i> Piece Bin Confirmed</div>
+      <div class="milestone-item mb-1" id="m-piece_drop_verified"><i class="bi bi-circle text-muted me-1"></i> Piece Drop Verified</div>
+      <div class="milestone-item" id="m-piece_sorting_finished"><i class="bi bi-circle text-muted me-1"></i> Sorting Finished</div>
     </div>
   </div>
 </div>
@@ -154,14 +158,12 @@
         <li class="alarm-none">No active alarms</li>
       </ul>
       <hr class="hairline my-3">
-      <h6 class="card-eyebrow">Batch vision grading</h6>
-      <div id="gradeContainer" class="d-flex align-items-center justify-content-between mb-2">
-        <span class="stat-label">Assigned grade</span>
-        <span class="state-badge" id="batchGradeBadge" data-state="idle">—</span>
-      </div>
-      <p class="stat-label mb-2" id="sortNote">Sampling initiates during the sorting phase.</p>
-      <div class="tally-row"><span>Valid sample frames</span><span class="stat-value" id="sampleValidCount">—</span></div>
-      <div class="tally-row"><span>Total attempts</span><span class="stat-value" id="sampleTotalCount">—</span></div>
+      <h6 class="card-eyebrow">Piece sorting</h6>
+      <p class="stat-label mb-2" id="pieceSortStatus">Sorting starts after cooldown.</p>
+      <div class="tally-row"><span>Current piece</span><span class="stat-value" id="pieceCurrentNumber">—</span></div>
+      <div class="tally-row"><span>Images captured</span><span class="stat-value" id="pieceCapturedCount">0</span></div>
+      <div class="tally-row"><span>Bins confirmed</span><span class="stat-value" id="pieceReviewedCount">0</span></div>
+      <div class="tally-row"><span>Drops verified</span><span class="stat-value" id="pieceDroppedCount">0</span></div>
       <p class="stat-label mt-3 mb-0">Weight loss is worked out after sorting (hopper in vs. bins out) and recorded in <a href="{{ url_for('batch_history') }}">Batch history</a>.</p>
     </div>
   </div>

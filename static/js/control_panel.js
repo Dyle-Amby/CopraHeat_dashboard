@@ -11,8 +11,6 @@ document.addEventListener('DOMContentLoaded', function () {
     set_target_kg: ['idle', 'intake'],
     skip_intake: ['intake'],
     end_drying: ['drying'],
-    override_grade: ['sorting'],
-    finish_sorting: ['sorting'],
     reset: ['complete', 'aborted'],
     abort: ['intake', 'drying', 'cooldown', 'sorting']
   };
@@ -66,19 +64,54 @@ document.addEventListener('DOMContentLoaded', function () {
     const optEl = $('promptOptions');
     if (!card || !msgEl || !optEl) return;
 
-    if (currentPromptId === prompt.id) return;  // already shown
+    if (currentPromptId === prompt.id) return;
     currentPromptId = prompt.id;
 
     msgEl.textContent = prompt.message || 'Machine awaiting operator decision';
+    const review = $('promptReview');
+    const reviewImage = $('promptReviewImage');
+    const reviewDetails = $('promptReviewDetails');
+    const context = prompt.context || {};
+    const showReview = Boolean(context.image_url || context.predicted_grade || context.scores);
+    if (review) review.classList.toggle('d-none', !showReview);
+    if (reviewImage) {
+      reviewImage.classList.toggle('d-none', !context.image_url);
+      if (context.image_url) reviewImage.src = context.image_url;
+      else reviewImage.removeAttribute('src');
+    }
+    if (reviewDetails) {
+      const prediction = context.predicted_grade || context.grade || 'No confident classification';
+      const confidence = Number.isFinite(Number(context.confidence))
+        ? ` · ${(Number(context.confidence) * 100).toFixed(1)}% confidence`
+        : '';
+      const scoreText = context.scores
+        ? Object.entries(context.scores).map(([grade, score]) => `${grade}: ${(Number(score) * 100).toFixed(1)}%`).join(' · ')
+        : '';
+      reviewDetails.textContent = [`Suggested bin: ${prediction}${confidence}`, scoreText, context.warning].filter(Boolean).join('\n');
+    }
     optEl.innerHTML = '';
 
     (prompt.options || []).forEach(opt => {
       const btn = document.createElement('button');
       btn.className = opt === 'abort' ? 'btn-danger-muted' : 'btn-outline-ink';
       btn.style.cssText = 'font-size:0.85rem; padding:4px 12px;';
-      btn.textContent = opt.replace(/_/g, ' ');
+      const labels = {
+        jog_reverse: 'Jog back 250 steps',
+        jog_forward: 'Jog forward 250 steps',
+        piece_staged: 'Piece is staged',
+        accept_suggested: context.predicted_grade ? `Accept ${context.predicted_grade}` : 'Accept suggested bin',
+        bad: 'Bad bin',
+        good: 'Good bin',
+        great: 'Great bin',
+        retake: 'Retake photo',
+        yes_more: 'Yes, more copra',
+        no_more: 'No, finish sorting',
+        retry_capture: 'Retry photo',
+      };
+      btn.textContent = labels[opt] || opt.replace(/_/g, ' ');
       btn.addEventListener('click', async () => {
         if (opt === 'abort' && !window.confirm('Abort the sorting operation?')) return;
+        btn.disabled = true;
         await run('answer_prompt', JSON.stringify({ id: prompt.id, action: opt }));
       });
       optEl.appendChild(btn);

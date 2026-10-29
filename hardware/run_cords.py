@@ -553,6 +553,7 @@ def main(argv: list[str] | None = None) -> None:
                             payload_dict = json.loads(row["payload"]) if row["payload"] else {}
                             action = payload_dict.get("action") or payload_dict.get("option", "")
                             prompt_id = payload_dict.get("id")
+                            sorting_prompt_handled = False
                             if action == "retry" and getattr(carriage_driver, "state", None) == "fault":
                                 carriage_driver.clear_fault()
                             if sorting_flow is not None and sorting_flow.active_prompt and (
@@ -561,6 +562,7 @@ def main(argv: list[str] | None = None) -> None:
                                 ok = sorting_flow.answer_prompt(action, now=now)
                                 controller.active_prompt = None
                                 message = f"prompt answered: {action}" if ok else "invalid prompt action"
+                                sorting_prompt_handled = ok
                                 if "aborted" in sorting_flow.alarms:
                                     controller.abort(f"sorting aborted ({action})")
                             if prompt_id == "unclean_shutdown" or unclean_prompt_active:
@@ -582,6 +584,8 @@ def main(argv: list[str] | None = None) -> None:
                                 db.update_live(conn, active_prompt=None)
                             elif action == "retry" and getattr(carriage_driver, "state", None) == "fault":
                                 carriage_driver.clear_fault()
+                            elif sorting_prompt_handled:
+                                pass
                             else:
                                 message = apply_command(controller, row["name"], row["payload"])
                         elif row["name"] == "set_drying_timer":
@@ -919,8 +923,8 @@ def main(argv: list[str] | None = None) -> None:
                         chamber_to_camera_steps=(
                             args.chamber_to_camera_steps or 0
                         ),
-                        discharge_total_steps=int(
-                            grading_cfg_merged.get("discharge_total_steps") or 3000
+                        camera_to_discharge_steps=int(
+                            grading_cfg_merged.get("camera_to_discharge_steps") or 0
                         ),
                         sample_hz=float(
                             grading_cfg_merged.get("sample_hz") or 400.0
@@ -961,20 +965,49 @@ def main(argv: list[str] | None = None) -> None:
 
                 # ── camera capture ────────────────────────────────────────────
                 frame_vector = None
+                capture_result = None
                 capture_done = False
                 if sorting_flow.capture_requested and not prev_capture_requested:
                     if args.simulate:
                         frame_vector = [0.05, 0.20, 0.75]   # simulated "great"
+                        capture_result = {
+                            "grade": "great",
+                            "predicted_grade": "great",
+                            "confidence": 0.75,
+                            "scores": {"bad": 0.05, "good": 0.20, "great": 0.75},
+                            "quality_ok": True,
+                        }
                         capture_done = True
                     elif webcam is not None and classifier is not None:
-                        frame_vector = webcam.capture_softmax(
+                        frame, capture_result = webcam.capture_for_review(
                             classifier,
                             sorting_flow.sampler.blur_threshold,
                             sorting_flow.sampler.min_confidence,
                         )
-                        capture_done = True  # Item 4: Even if None (rejected/blur), capture completed
+                        if frame is not None:
+                            capture_attempt = sorting_flow.piece_attempt + 1
+                            image_path = (
+                                BASE_DIR / "piece_captures" / f"batch_{batch_id or 0}"
+                                / f"piece_{sorting_flow.piece_number}_attempt_{capture_attempt}.jpg"
+                            )
+                            save_camera_preview(frame, image_path)
+                            capture_result["image_url"] = (
+                                f"/api/batches/{batch_id or 0}/pieces/"
+                                f"{sorting_flow.piece_number}/image"
+                                f"?attempt={capture_attempt}"
+                            )
+                            scores = capture_result.get("scores") or {}
+                            frame_vector = [scores.get(label, 0.0) for label in ("bad", "good", "great")]
+                        capture_done = True
                     else:
                         frame_vector = [0.05, 0.15, 0.80]   # dry-run mock
+                        capture_result = {
+                            "grade": "great",
+                            "predicted_grade": "great",
+                            "confidence": 0.80,
+                            "scores": {"bad": 0.05, "good": 0.15, "great": 0.80},
+                            "quality_ok": True,
+                        }
                         capture_done = True
                 prev_capture_requested = sorting_flow.capture_requested
 
@@ -987,7 +1020,7 @@ def main(argv: list[str] | None = None) -> None:
                     conveyor.move(
                         sorting_flow.conveyor_move_steps,
                         hz=sorting_flow.conveyor_move_hz,
-                        forward=True,
+                        forward=sorting_flow.conveyor_move_forward,
                         now=now,
                     )
 
@@ -1010,8 +1043,13 @@ def main(argv: list[str] | None = None) -> None:
                     operator_grade=controller.operator_grade,
                     copra_present=copra_present,
                     frame_vector=frame_vector,
+                    capture_result=capture_result,
                     capture_done=capture_done,
                 )
+
+                if conn is not None and batch_id is not None:
+                    for event_name, event_details in sorting_flow.drain_piece_events():
+                        db.log_batch_event(conn, batch_id, event_name, event_details)
 
                 if "aborted" in sorting_flow.alarms and controller.state in _LIVE:
                     controller.abort("sorting flow aborted")
@@ -1147,22 +1185,6 @@ def main(argv: list[str] | None = None) -> None:
                 # 9. Sorting Positioning Done
                 if commands.state is BatchState.SORTING:
                     emit_milestone("sorting_positioning_done")
-
-                # 10. Sample Captured (valid camera frame)
-                if sample_valid_n and sample_valid_n > 0:
-                    emit_milestone("sample_captured", f"Valid samples: {sample_valid_n}/{sample_total_n}")
-
-                # 11. Batch Grade Assigned
-                if batch_grade:
-                    emit_milestone("batch_grade_assigned", f"Consensus Grade: {batch_grade}")
-
-                # 12. Discharge Completed
-                if sorting_flow and sorting_flow.stage.value == "complete":
-                    emit_milestone("discharge_completed")
-
-                # 13. Weight Gain Verified
-                if sorting_flow and sorting_flow.stage.value in ("verify", "complete"):
-                    emit_milestone("weight_gain_verified")
 
             # Reset milestones when transitioning to a new batch or IDLE
             if commands.state is BatchState.INTAKE and previous_state in (None, BatchState.IDLE):

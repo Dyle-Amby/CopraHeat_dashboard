@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app import create_app, fmt_duration, supervisor_status
 from hardware import db
@@ -67,6 +68,19 @@ class TestPages(AppCase):
         html = resp.get_data(as_text=True)
         self.assertEqual(html.count('id="btnCalibrationLock"'), 1)
         self.assertLess(html.index('id="btnCalibrationLock"'), html.index('id="componentTabs"'))
+
+    def test_piece_image_route_serves_saved_capture(self):
+        image_path = Path(self._tmp.name) / "piece_captures" / "batch_7" / "piece_2_attempt_1.jpg"
+        image_path.parent.mkdir(parents=True)
+        image_path.write_bytes(b"jpeg test data")
+
+        with patch("app.Path", return_value=Path(self._tmp.name)):
+            response = self.client.get("/api/batches/7/pieces/2/image")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "image/jpeg")
+        self.assertEqual(response.data, b"jpeg test data")
+        response.close()
 
 
 class TestLive(AppCase):

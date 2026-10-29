@@ -16,6 +16,7 @@ venv/
 *.db-shm
 *.db-journal
 *.log
+piece_captures/
 
 # Editors / OS
 .vscode/

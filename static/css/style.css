@@ -14,6 +14,36 @@
   --line:#d8d1bf;
 }
 
+.prompt-review {
+  display: grid;
+  grid-template-columns: minmax(0, 360px) minmax(180px, 1fr);
+  gap: 12px;
+  align-items: start;
+  margin: 12px 0;
+}
+.prompt-review-image {
+  display: block;
+  width: 100%;
+  max-height: 300px;
+  object-fit: contain;
+  background: var(--charcoal-2);
+  border: 1px solid var(--cream-3);
+}
+.prompt-review-details {
+  white-space: pre-line;
+  font-size: .9rem;
+  line-height: 1.5;
+  color: var(--charcoal);
+}
+@media (max-width: 575.98px) {
+  .prompt-review {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .prompt-review-image {
+    max-height: 240px;
+  }
+}
+
 *{ box-sizing:border-box; }
 
 body{

@@ -274,6 +274,21 @@ def create_app(db_path=None) -> Flask:
             "Expires": "0"
         })
 
+    @app.get("/api/batches/<int:batch_id>/pieces/<int:piece_number>/image")
+    def api_piece_image(batch_id: int, piece_number: int):
+        attempt = request.args.get("attempt", default=1, type=int)
+        image_path = (
+            Path(app.root_path) / "piece_captures" / f"batch_{batch_id}"
+            / f"piece_{piece_number}_attempt_{attempt}.jpg"
+        )
+        if piece_number < 1 or attempt < 1 or not image_path.is_file():
+            abort(404)
+        resp = make_response(send_file(image_path, mimetype="image/jpeg"))
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+        return resp
+
     @app.get("/api/settings")
     def api_settings():
         return jsonify(db.get_settings(get_conn()))

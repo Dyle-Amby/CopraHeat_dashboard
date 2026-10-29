@@ -19,6 +19,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 # Paths to default model and labels in CopraHeat_dashboard root
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -209,6 +210,38 @@ class USBWebcam:
 
         # Return vector ordered by ("bad", "good", "great")
         return [scores.get(label, 0.0) for label in ("bad", "good", "great")]
+
+    def capture_for_review(
+        self,
+        classifier: CopraClassifier,
+        blur_threshold: float = 100.0,
+        min_confidence: float = 0.55,
+    ) -> tuple[object | None, dict[str, Any]]:
+        """Capture one piece image and return its reviewable classification details."""
+        ok, frame = self.read_frame()
+        if not ok or frame is None:
+            return None, {"error": f"Could not read frame from USB camera #{self.camera_index}"}
+
+        blur_score = None
+        try:
+            import cv2
+
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+            blur_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        except Exception:
+            pass
+
+        grade, confidence, scores = classifier.predict(frame)
+        quality_ok = confidence >= min_confidence and (blur_score is None or blur_score >= blur_threshold)
+        return frame, {
+            "grade": grade if quality_ok else None,
+            "predicted_grade": grade,
+            "confidence": float(confidence),
+            "scores": {label: float(score) for label, score in scores.items()},
+            "blur_score": blur_score,
+            "quality_ok": quality_ok,
+            "warning": None if quality_ok else "Image is blurry or model confidence is below the acceptance threshold.",
+        }
 
     def release(self) -> None:
         if self._cap is not None:
