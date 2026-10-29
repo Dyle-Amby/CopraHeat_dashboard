@@ -433,8 +433,43 @@
             });
         }
 
-        bindCommand('btnHoldJogFwd', 'jog_conveyor', { steps: 2000, forward: true });
-        bindCommand('btnHoldJogRev', 'jog_conveyor', { steps: 2000, forward: false });
+        const holdJog = (buttonId, { direction, steps = 2000, repeatMs = 180 }) => {
+            const button = document.getElementById(buttonId);
+            if (!button) return;
+
+            let intervalId = null;
+            let isHeld = false;
+
+            const sendJog = () => {
+                if (!calibrationLocked || !isHeld) return;
+                sendCommand('jog_conveyor', { steps, forward: direction === 'forward' });
+            };
+
+            const stopHold = () => {
+                if (!calibrationLocked) return;
+                isHeld = false;
+                if (intervalId) {
+                    clearInterval(intervalId);
+                    intervalId = null;
+                }
+                sendCommand('stop_conveyor', {});
+            };
+
+            button.addEventListener('pointerdown', (event) => {
+                if (event) event.preventDefault();
+                if (!calibrationLocked) return;
+                isHeld = true;
+                sendJog();
+                intervalId = setInterval(sendJog, repeatMs);
+            });
+
+            ['pointerup', 'pointerleave', 'pointercancel', 'blur'].forEach(type => {
+                button.addEventListener(type, stopHold);
+            });
+        };
+
+        holdJog('btnHoldJogFwd', { direction: 'forward', steps: 2000, repeatMs: 180 });
+        holdJog('btnHoldJogRev', { direction: 'reverse', steps: 2000, repeatMs: 180 });
         bindCommand('btnStopConveyor', 'stop_conveyor', {});
 
         // Driver settings save
