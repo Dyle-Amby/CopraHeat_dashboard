@@ -85,7 +85,7 @@ DEFAULT_SETTINGS = {
     "hopper_to_chamber_steps": "0",
     "chamber_to_camera_steps": "0",
     "conveyor_p00": "10000",
-    "conveyor_hz": "400.0",
+    "conveyor_hz": "2000.0",
     "conveyor_cal_stale": "0",
     "leg_hopper_to_chamber_meta": "{}",
     "leg_chamber_to_camera_meta": "{}",

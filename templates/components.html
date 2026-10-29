@@ -188,23 +188,24 @@
             </div>
             <div class="card-body collapse show" id="driverConfigBody">
                 <div class="row g-3 align-items-end">
-                    <div class="col-md-4">
+                    <div class="col-md-6">
                         <label class="form-label small text-muted">Pulses / Revolution (P00)</label>
                         <input type="number" class="form-control form-control-sm" id="inputP00" value="10000" min="200"
                             step="100">
                         <div class="form-text small">Default: 10,000 pulses/rev (HBS57H DIP switch setting)</div>
                     </div>
-                    <div class="col-md-4">
-                        <label class="form-label small text-muted">Step Frequency (Hz)</label>
-                        <input type="number" class="form-control form-control-sm" id="inputConveyorHz" value="400"
-                            min="50" max="2000" step="50">
-                        <div class="form-text small">Default: 400.0 Hz (Safe startup speed)</div>
+                    <div class="col-md-6">
+                        <div class="border rounded px-3 py-2 bg-light h-100 d-flex flex-column justify-content-center">
+                            <div class="small text-muted">Calibration Drive Rate</div>
+                            <div class="fw-bold fs-5">2000 Hz</div>
+                            <div class="form-text small">Fixed for stable conveyor calibration and manual jogging.</div>
+                        </div>
                     </div>
-                    <div class="col-md-4">
-                        <button class="btn btn-sm btn-outline-primary w-100" id="btnSaveDriverConfig">
-                            <i class="bi bi-save"></i> Save Driver Settings
-                        </button>
-                    </div>
+                </div>
+                <div class="mt-3">
+                    <button class="btn btn-sm btn-outline-primary w-100" id="btnSaveDriverConfig">
+                        <i class="bi bi-save"></i> Save Driver Settings
+                    </button>
                 </div>
             </div>
         </section>
@@ -238,17 +239,12 @@
                         </div>
                     </div>
 
-                    <!-- Continuous Jog & Stop -->
+                    <!-- Stop Control -->
                     <div class="col-lg-6 d-flex flex-column justify-content-between">
                         <div>
-                            <label class="form-label small text-muted fw-bold">Continuous Jog &amp; Stop</label>
-                            <div class="btn-group w-100 mb-2">
-                                <button class="btn btn-outline-dark btn-sm" id="btnHoldJogRev" type="button">
-                                    <i class="bi bi-arrow-left-circle"></i> Hold Reverse
-                                </button>
-                                <button class="btn btn-outline-dark btn-sm" id="btnHoldJogFwd" type="button">
-                                    Hold Forward <i class="bi bi-arrow-right-circle"></i>
-                                </button>
+                            <label class="form-label small text-muted fw-bold">Manual Stop</label>
+                            <div class="alert alert-light border mb-2 mb-0 small text-muted">
+                                Calibration jogs are fixed-rate step moves at 2000 Hz for reliable manual positioning.
                             </div>
                         </div>
                         <button class="btn btn-danger btn-lg w-100 fw-bold" id="btnStopConveyor">

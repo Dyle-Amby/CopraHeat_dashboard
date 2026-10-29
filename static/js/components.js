@@ -15,8 +15,6 @@
         const lockRequiredButtons = [
             '#btnSaveDriverConfig',
             '#btnAcknowledgeFresh',
-            '#btnHoldJogRev',
-            '#btnHoldJogFwd',
             '#btnStopConveyor',
             '#btnCustomJogRev',
             '#btnCustomJogFwd',
@@ -75,18 +73,12 @@
         }
     };
 
-    function getConveyorHzInput() {
-        const input = document.getElementById('inputConveyorHz');
-        if (!input) return 400.0;
-        const hz = parseFloat(input.value);
-        return Number.isFinite(hz) && hz > 0 ? hz : 400.0;
-    }
+    const FIXED_CONVEYOR_HZ = 2000.0;
 
-    function sendConveyorJog(steps, forward, hzOverride) {
-        const hz = Number.isFinite(hzOverride) && hzOverride > 0 ? hzOverride : getConveyorHzInput();
+    function sendConveyorJog(steps, forward) {
         return window.CORDS.sendCommand('jog_conveyor', {
             steps: Math.abs(steps),
-            hz,
+            hz: FIXED_CONVEYOR_HZ,
             forward: Boolean(forward)
         });
     }
@@ -126,14 +118,10 @@
 
         // Driver settings and RPM
         const p00 = parseFloat(settings.conveyor_p00 || '10000');
-        const hz = parseFloat(settings.conveyor_hz || '400');
+        const hz = FIXED_CONVEYOR_HZ;
         const rpm = p00 > 0 ? ((hz * 60) / p00).toFixed(2) : '—';
         setText('c-speed-rpm', rpm);
 
-        const hzInput = document.getElementById('inputConveyorHz');
-        if (hzInput && document.activeElement !== hzInput) {
-            hzInput.value = Number.isFinite(hz) && hz > 0 ? hz.toString() : '400';
-        }
         const p00Input = document.getElementById('inputP00');
         if (p00Input && document.activeElement !== p00Input) {
             p00Input.value = Number.isFinite(p00) && p00 > 0 ? String(Math.round(p00)) : '10000';
@@ -458,45 +446,13 @@
             });
         }
 
-        const holdJog = (buttonId, { direction, steps = 200000, hz = null }) => {
-            const button = document.getElementById(buttonId);
-            if (!button) return;
-
-            let isHeld = false;
-
-            const startJog = () => {
-                if (!calibrationLocked || isHeld) return;
-                isHeld = true;
-                sendConveyorJog(steps, direction === 'forward', hz ?? getConveyorHzInput());
-            };
-
-            const stopHold = () => {
-                if (!calibrationLocked || !isHeld) return;
-                isHeld = false;
-                sendCommand('stop_conveyor', {});
-            };
-
-            button.addEventListener('pointerdown', (event) => {
-                if (event) event.preventDefault();
-                startJog();
-            });
-
-            ['pointerup', 'pointerleave', 'pointercancel', 'blur'].forEach(type => {
-                button.addEventListener(type, stopHold);
-            });
-        };
-
-        holdJog('btnHoldJogFwd', { direction: 'forward', steps: 200000 });
-        holdJog('btnHoldJogRev', { direction: 'reverse', steps: 200000 });
         bindCommand('btnStopConveyor', 'stop_conveyor', {});
-
         // Driver settings save
         const btnSaveDriver = document.getElementById('btnSaveDriverConfig');
         if (btnSaveDriver) {
             btnSaveDriver.addEventListener('click', () => {
                 const p00 = parseInt(document.getElementById('inputP00')?.value, 10) || 10000;
-                const hz = parseFloat(document.getElementById('inputConveyorHz')?.value) || 400.0;
-                sendCommand('set_conveyor_p00', { p00, hz });
+                sendCommand('set_conveyor_p00', { p00, hz: FIXED_CONVEYOR_HZ });
             });
         }
 
