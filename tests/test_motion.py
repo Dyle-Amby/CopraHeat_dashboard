@@ -49,6 +49,11 @@ class TestSimulatedConveyorMotion(unittest.TestCase):
         self.assertEqual(self.conveyor.last_result, "done")
         self.assertEqual(self.conveyor.position_steps, 1000)
 
+    def test_move_rejected_while_busy(self):
+        self.assertTrue(self.conveyor.move(1000, hz=500.0, now=0.0))
+        self.assertFalse(self.conveyor.move(100, hz=500.0, now=0.1))
+        self.assertEqual(self.conveyor.last_result, "refused")
+
     def test_stop_on_abort_or_close(self):
         # Start 1000 steps at 500 Hz
         self.conveyor.move(1000, hz=500.0, now=0.0)
@@ -95,7 +100,7 @@ class TestStepperConveyor(unittest.TestCase):
 
     def test_exact_counted_burst_and_completion(self):
         stepper_mock = MagicMock()
-        stepper_mock.busy = True
+        stepper_mock.busy = False
         conv = StepperConveyor.__new__(StepperConveyor)
         conv.hopper_to_chamber_steps = 1500
         conv.default_hz = 500.0
@@ -106,6 +111,7 @@ class TestStepperConveyor(unittest.TestCase):
         conv._target_steps = 0
         conv._move_forward = True
         conv._was_busy = False
+        conv._moved_at = None
 
         accepted = conv.move(1500, hz=500.0, forward=True)
         self.assertTrue(accepted)

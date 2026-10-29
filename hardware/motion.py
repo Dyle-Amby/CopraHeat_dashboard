@@ -110,6 +110,9 @@ class StepperConveyor(BaseConveyor):
         return is_busy
 
     def move(self, steps: int, hz: float | None = None, forward: bool = True, now: float | None = None) -> bool:
+        if getattr(self, "_moved_at", None) is not None or getattr(self.stepper, "busy", False):
+            self.last_result = "refused"
+            return False
         if steps <= 0:
             self.last_result = "refused"
             return False
@@ -188,6 +191,9 @@ class SimulatedConveyor(BaseConveyor):
         return self._busy
 
     def move(self, steps: int, hz: float | None = None, forward: bool = True, now: float | None = None) -> bool:
+        if self._busy:
+            self.last_result = "refused"
+            return False
         if steps <= 0:
             self.last_result = "refused"
             return False

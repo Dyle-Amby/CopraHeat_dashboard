@@ -704,7 +704,7 @@ def main(argv: list[str] | None = None) -> None:
                             steps = abs(steps)
                             if conveyor is not None:
                                 if conveyor.busy:
-                                    conveyor.stop()
+                                    raise RuntimeError("conveyor is already moving; wait for the current jog to finish")
                                 if not conveyor.move(steps, hz=hz, forward=forward, now=now):
                                     raise RuntimeError(f"conveyor move refused: steps={steps}, hz={hz}, forward={forward}")
                                 dir_str = "forward" if forward else "reverse"

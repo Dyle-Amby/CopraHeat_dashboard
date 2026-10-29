@@ -74,10 +74,17 @@
     };
 
     const FIXED_CONVEYOR_HZ = 2000.0;
+    const MIN_CONVEYOR_JOG_STEPS = 1000;
+
+    function normalizeJogSteps(steps, fallback = 5000) {
+        const parsed = Math.abs(parseInt(steps, 10));
+        if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+        return Math.max(parsed, MIN_CONVEYOR_JOG_STEPS);
+    }
 
     function sendConveyorJog(steps, forward) {
         return window.CORDS.sendCommand('jog_conveyor', {
-            steps: Math.abs(steps),
+            steps: normalizeJogSteps(steps),
             hz: FIXED_CONVEYOR_HZ,
             forward: Boolean(forward)
         });
@@ -425,8 +432,8 @@
         // --- Conveyor Jog Controller ---
         document.querySelectorAll('[data-jog]').forEach(btn => {
             btn.addEventListener('click', () => {
-                const steps = parseInt(btn.dataset.jog, 10);
-                sendConveyorJog(steps, steps > 0);
+                const steps = normalizeJogSteps(btn.dataset.jog, 5000);
+                sendConveyorJog(steps, Number(btn.dataset.jog) > 0);
             });
         });
 
@@ -435,13 +442,13 @@
         const btnCustomJogRev = document.getElementById('btnCustomJogRev');
         if (btnCustomJogFwd && inputCustomJog) {
             btnCustomJogFwd.addEventListener('click', () => {
-                const s = Math.abs(parseInt(inputCustomJog.value, 10) || 500);
+                const s = normalizeJogSteps(inputCustomJog.value, 5000);
                 sendConveyorJog(s, true);
             });
         }
         if (btnCustomJogRev && inputCustomJog) {
             btnCustomJogRev.addEventListener('click', () => {
-                const s = Math.abs(parseInt(inputCustomJog.value, 10) || 500);
+                const s = normalizeJogSteps(inputCustomJog.value, 5000);
                 sendConveyorJog(s, false);
             });
         }
