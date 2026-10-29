@@ -467,6 +467,7 @@ class BatchController:
             self._skip_intake_requested = False
             self._dispensed = True
             self._intake_skipped = True          # telemetry flag for logs / dashboard
+            self._hold_gate_open_for_advance = False
             if self.weight_in_kg is None:
                 self.weight_in_kg = self.gate.stable_kg or i.hopper_kg or self.target_kg
             self._alarms.discard("intake_stall")
@@ -487,6 +488,8 @@ class BatchController:
             if was_open and not gate_open:
                 self._dispensed = True
                 self._advance_started = i.now
+                self._hold_gate_open_for_advance = True
+                return True, ConveyorCommand.STOP
             elif i.now - self._entered_at >= self.intake_stall_s:
                 self._alarms.add("intake_stall")
             return gate_open, ConveyorCommand.STOP
@@ -500,6 +503,7 @@ class BatchController:
         if self._conveyor_ack and not i.conveyor_busy:
             self._alarms.discard("conveyor_stall")
             self._alarms.discard("intake_advance_timeout")
+            self._hold_gate_open_for_advance = False
             self._to(BatchState.DRYING, i.now)
             return False, ConveyorCommand.STOP
 
@@ -507,6 +511,7 @@ class BatchController:
         #    but never finished". Stop and hold; operator must abort.
         if i.now - self._advance_started >= self.intake_advance_timeout_s:
             self._alarms.add("intake_advance_timeout")
+            self._hold_gate_open_for_advance = False
             return False, ConveyorCommand.STOP
 
         # 3. Belt is busy right now → record that it acknowledged the command.
@@ -516,7 +521,7 @@ class BatchController:
         elif i.now - self._advance_started >= self.conveyor_ack_s:
             self._alarms.add("conveyor_stall")
 
-        return False, ConveyorCommand.INTAKE_ADVANCE
+        return self._hold_gate_open_for_advance, ConveyorCommand.INTAKE_ADVANCE
 
     def _drying(self, i: Inputs) -> None:
         done = self.endpoint.update(i.exhaust_temp, i.exhaust_rh, i.now)
@@ -664,6 +669,7 @@ class BatchController:
         self.active_prompt: Prompt | None = None
         self._intake_skipped = False
         self._dispensed = False
+        self._hold_gate_open_for_advance = False
         self._conveyor_ack = False
         self._advance_started = now
         self._drying_started: float | None = None

@@ -113,12 +113,39 @@ class TestIntake(unittest.TestCase):
         self.assertTrue(out.gate_open)
         self.assertAlmostEqual(c.weight_in_kg, 2.0)
 
-    def test_gate_closes_when_empty_then_the_conveyor_is_commanded(self):
+    def test_gate_stays_open_until_intake_conveyor_advance_finishes(self):
+        c = make()
+        t = to_intake(c)
+        for _ in range(5):
+            out = c.update(Inputs(now=t, chamber_temp=25.0, hopper_kg=2.0))
+            t += 1
+        self.assertTrue(out.gate_open)
+
+        for _ in range(5):
+            out = c.update(Inputs(now=t, chamber_temp=25.0, hopper_kg=0.0))
+            t += 1
+        self.assertTrue(out.gate_open)
+        self.assertIs(out.conveyor, ConveyorCommand.STOP)
+
+        out = c.update(Inputs(now=t, chamber_temp=25.0, conveyor_busy=False))
+        self.assertTrue(out.gate_open)
+        self.assertIs(out.conveyor, ConveyorCommand.INTAKE_ADVANCE)
+
+        out = c.update(Inputs(now=t + 1, chamber_temp=25.0, conveyor_busy=True))
+        self.assertTrue(out.gate_open)
+        self.assertIs(out.conveyor, ConveyorCommand.INTAKE_ADVANCE)
+
+        out = c.update(Inputs(now=t + 2, chamber_temp=25.0, conveyor_busy=False))
+        self.assertFalse(out.gate_open)
+        self.assertIs(out.conveyor, ConveyorCommand.STOP)
+        self.assertIs(out.state, DRYING)
+
+    def test_gate_stays_open_when_empty_while_the_conveyor_is_commanded(self):
         c = make()
         t = dispense(c, to_intake(c))
         out = c.update(Inputs(now=t, chamber_temp=25.0))
         self.assertIs(c.state, INTAKE)
-        self.assertFalse(out.gate_open)
+        self.assertTrue(out.gate_open)
         self.assertIs(out.conveyor, ConveyorCommand.INTAKE_ADVANCE)
 
     def test_conveyor_move_completing_enters_drying(self):
@@ -203,6 +230,7 @@ class TestSkipIntake(unittest.TestCase):
         c.skip_intake()
         out = c.update(Inputs(now=t, chamber_temp=25.0))
         self.assertIs(c.state, INTAKE)
+        self.assertFalse(out.gate_open)
         self.assertIs(out.conveyor, ConveyorCommand.INTAKE_ADVANCE)
         t = advance(c, t)
         self.assertIs(c.state, DRYING)
@@ -247,6 +275,7 @@ class TestSkipIntake(unittest.TestCase):
         out = c.update(Inputs(now=t + 11.0, chamber_temp=25.0, conveyor_busy=False))
         self.assertIn("intake_advance_timeout", out.alarms)
         self.assertIs(out.conveyor, ConveyorCommand.STOP)
+        self.assertFalse(out.gate_open)
         self.assertIs(c.state, INTAKE)
 
     def test_advance_timeout_when_belt_goes_busy_but_never_finishes(self):
@@ -257,6 +286,7 @@ class TestSkipIntake(unittest.TestCase):
         out = c.update(Inputs(now=t + 11.0, chamber_temp=25.0, conveyor_busy=True))
         self.assertIn("intake_advance_timeout", out.alarms)
         self.assertIs(out.conveyor, ConveyorCommand.STOP)
+        self.assertFalse(out.gate_open)
         self.assertIs(c.state, INTAKE)
 
 
