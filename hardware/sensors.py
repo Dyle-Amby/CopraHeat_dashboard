@@ -2,7 +2,7 @@
 
 Requires in /boot/firmware/config.txt:
     dtoverlay=w1-gpio,gpiopin=4      # DS18B20 (w1_therm)
-    dtoverlay=dht11,gpiopin=11       # DHT22 (GPIO11 / physical pin 23; driver handles both)
+    dtoverlay=dht11,gpiopin=26       # DHT22 (GPIO26 / physical pin 37; driver handles both)
 
 Every reader returns None on any failure so callers fall into their fault paths.
 """
