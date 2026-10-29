@@ -267,7 +267,7 @@ The dashboard is the operator interface for a custom copra processing machine, c
 | Subsystem | Signal | BCM | Physical pin |
 |---|---|---|---|
 | Sensors | DS18B20 data (1-Wire) | 4 | 7 |
-| | DHT22 data | 12 | 32 |
+| | DHT22 data | 26 | 37 |
 | Load cells | HX711 Hopper — DOUT / SCK | 7 / 8 | 26 / 24 |
 | | HX711 Bin-Great — DOUT / SCK | 9 / 10 | 21 / 19 |
 | | HX711 Bin-Good — DOUT / SCK | 15 / 14 | 10 / 8 |
@@ -279,14 +279,14 @@ The dashboard is the operator interface for a custom copra processing machine, c
 | Triggers | Fotek SSR (heaters) | 5 | 29 |
 | | Fan relay (via 2N2222) | 25 | 22 |
 
-GPIO26 (physical pin 37) is currently unassigned. Reserved: GPIO0/1 (HAT EEPROM), GPIO2/3 (I²C), GPIO14/15 (UART), GPIO19 (kept clear for the servo's PWM pair).
+Reserved: GPIO0/1 (HAT EEPROM), GPIO2/3 (I²C), GPIO14/15 (UART), GPIO19 (kept clear for the servo's PWM pair).
 
 **Board and OS requirements**
 
 - SPI must stay **disabled** in `raspi-config` — GPIO7–11 are the SPI0 block and carry four HX711 lines.
 - 10 kΩ pull-downs on the heater SSR trigger (GPIO5 → GND) and on the fan transistor base, so neither can fire while GPIO floats during boot or a crashed control process.
 - 4.7 kΩ pull-up on the DS18B20 data line, plus `dtoverlay=w1-gpio,gpiopin=4` in `/boot/firmware/config.txt`.
-- DHT22 is read through the kernel IIO driver, not a Python bit-bang library (unreliable on the Pi 5's RP1): add `dtoverlay=dht11,gpiopin=12` to `config.txt` — the `dht11` driver handles DHT22 as well.
+- DHT22 is read through the kernel IIO driver, not a Python bit-bang library (unreliable on the Pi 5's RP1): add `dtoverlay=dht11,gpiopin=26` to `config.txt` — the `dht11` driver handles DHT22 as well.
 - The servo uses hardware PWM: add `dtoverlay=pwm-2chan` to `config.txt`, then confirm with `pinctrl get 18` and `ls /sys/class/pwm/`. On the current Pi 5 setup GPIO18 is pwmchip0 / channel 2; verify on the target board and pass `--pwm-chip` / `--pwm-channel` to `run_hopper` if different. The hopper gate is configured as 0° open and 180° closed.
 - HX711 tare offsets and scale are per-machine: run `python -m hardware.run_hopper --calibrate` after fabrication and pass the printed flags. The hopper cell is mounted on the gate, so it is tared in both the closed and open positions.
 - Stepper driver inputs (TB6600, HBS57H) use 2N2222A NPN sinking transistors on PUL/DIR, with PUL+ and DIR+ tied to a 5 V rail (common-anode sinking configuration). Relay and SSR triggers use an NPN buffer.

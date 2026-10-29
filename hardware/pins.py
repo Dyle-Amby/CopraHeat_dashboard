@@ -19,7 +19,7 @@ class StepperPins(NamedTuple):
 
 # --- Sensors -----------------------------------------------------------------
 DS18B20_DATA = 4    # phys 7  - 1-Wire; needs dtoverlay=w1-gpio,gpiopin=4; 4.7k pull-up to 3V3 on board
-DHT22_DATA = 12     # phys 32 - 10k pull-up (check whether the breakout already has one)
+DHT22_DATA = 26     # phys 37 - 10k pull-up (check whether the breakout already has one)
 
 # --- Load cells --------------------------------------------------------------
 # GPIO7-11 are the SPI0 block. SPI must stay DISABLED in raspi-config,
