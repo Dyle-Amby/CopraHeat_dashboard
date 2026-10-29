@@ -207,7 +207,7 @@ def watch_cells(args: argparse.Namespace) -> None:
 def watch_sensors(args: argparse.Namespace) -> None:
     from hardware import sensors
 
-    print("chamber = DS18B20 (GPIO4, pin 7), exhaust = DHT22 (GPIO26, pin 37). Ctrl+C = back to menu")
+    print("chamber = DS18B20 (GPIO4, pin 7), exhaust = DHT22 (GPIO1, pin 28). Ctrl+C = back to menu")
     show = lambda v, unit: "--" if v is None else f"{v:.1f}{unit}"
     try:
         while True:

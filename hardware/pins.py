@@ -19,7 +19,7 @@ class StepperPins(NamedTuple):
 
 # --- Sensors -----------------------------------------------------------------
 DS18B20_DATA = 4    # phys 7  - 1-Wire; needs dtoverlay=w1-gpio,gpiopin=4; 4.7k pull-up to 3V3 on board
-DHT22_DATA = 26     # phys 37 - 10k pull-up (check whether the breakout already has one)
+DHT22_DATA = 1      # phys 28 - HAT ID_SCL; only use if HAT EEPROM is not needed
 
 # --- Load cells --------------------------------------------------------------
 # GPIO7-11 are the SPI0 block. SPI must stay DISABLED in raspi-config,
@@ -59,7 +59,8 @@ FAN_RELAY = 25  # phys 22 - Tongling relay via 2N2222; pull-down on transistor b
 
 # No free GPIO left: GPIO25 (phys 22), the last spare, now drives the fan relay.
 # GPIO6 (phys 31) is DEAD on this Pi (output stage, found 2026-10-10) - never assign it.
-# GPIO2/3 (I2C), GPIO14/15 (UART) reserved. GPIO0/1 are HAT EEPROM, never use.
+# GPIO2/3 (I2C), GPIO14/15 (UART) reserved. GPIO0/1 are HAT EEPROM lines;
+# GPIO1 is deliberately repurposed for DHT22, so HAT EEPROM access is unavailable.
 
 
 _ASSIGNED = [
