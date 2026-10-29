@@ -75,6 +75,22 @@
         }
     };
 
+    function getConveyorHzInput() {
+        const input = document.getElementById('inputConveyorHz');
+        if (!input) return 400.0;
+        const hz = parseFloat(input.value);
+        return Number.isFinite(hz) && hz > 0 ? hz : 400.0;
+    }
+
+    function sendConveyorJog(steps, forward, hzOverride) {
+        const hz = Number.isFinite(hzOverride) && hzOverride > 0 ? hzOverride : getConveyorHzInput();
+        return window.CORDS.sendCommand('jog_conveyor', {
+            steps: Math.abs(steps),
+            hz,
+            forward: Boolean(forward)
+        });
+    }
+
     function render(live) {
         updateCalibrationLockUI(live.calibration_locked);
 
@@ -113,6 +129,15 @@
         const hz = parseFloat(settings.conveyor_hz || '400');
         const rpm = p00 > 0 ? ((hz * 60) / p00).toFixed(2) : '—';
         setText('c-speed-rpm', rpm);
+
+        const hzInput = document.getElementById('inputConveyorHz');
+        if (hzInput && document.activeElement !== hzInput) {
+            hzInput.value = Number.isFinite(hz) && hz > 0 ? hz.toString() : '400';
+        }
+        const p00Input = document.getElementById('inputP00');
+        if (p00Input && document.activeElement !== p00Input) {
+            p00Input.value = Number.isFinite(p00) && p00 > 0 ? String(Math.round(p00)) : '10000';
+        }
 
         // Stale Calibration Indicator
         const isStale = settings.conveyor_cal_stale === '1';
@@ -413,7 +438,7 @@
         document.querySelectorAll('[data-jog]').forEach(btn => {
             btn.addEventListener('click', () => {
                 const steps = parseInt(btn.dataset.jog, 10);
-                sendCommand('jog_conveyor', { steps: Math.abs(steps), forward: steps > 0 });
+                sendConveyorJog(steps, steps > 0);
             });
         });
 
@@ -423,17 +448,17 @@
         if (btnCustomJogFwd && inputCustomJog) {
             btnCustomJogFwd.addEventListener('click', () => {
                 const s = Math.abs(parseInt(inputCustomJog.value, 10) || 500);
-                sendCommand('jog_conveyor', { steps: s, forward: true });
+                sendConveyorJog(s, true);
             });
         }
         if (btnCustomJogRev && inputCustomJog) {
             btnCustomJogRev.addEventListener('click', () => {
                 const s = Math.abs(parseInt(inputCustomJog.value, 10) || 500);
-                sendCommand('jog_conveyor', { steps: s, forward: false });
+                sendConveyorJog(s, false);
             });
         }
 
-        const holdJog = (buttonId, { direction, steps = 10000, hz = 3000 }) => {
+        const holdJog = (buttonId, { direction, steps = 10000, hz = null }) => {
             const button = document.getElementById(buttonId);
             if (!button) return;
 
@@ -441,11 +466,7 @@
 
             const sendJog = () => {
                 if (!calibrationLocked || !isHeld) return;
-                sendCommand('jog_conveyor', {
-                    steps,
-                    hz,
-                    forward: direction === 'forward'
-                });
+                sendConveyorJog(steps, direction === 'forward', hz ?? getConveyorHzInput());
             };
 
             const stopHold = () => {
@@ -466,8 +487,8 @@
             });
         };
 
-        holdJog('btnHoldJogFwd', { direction: 'forward', steps: 10000, hz: 3000 });
-        holdJog('btnHoldJogRev', { direction: 'reverse', steps: 10000, hz: 3000 });
+        holdJog('btnHoldJogFwd', { direction: 'forward', steps: 10000 });
+        holdJog('btnHoldJogRev', { direction: 'reverse', steps: 10000 });
         bindCommand('btnStopConveyor', 'stop_conveyor', {});
 
         // Driver settings save
@@ -549,7 +570,7 @@
                     alert('Conveyor is already at or behind start position.');
                     return;
                 }
-                sendCommand('jog_conveyor', { steps: delta, forward: false });
+                sendConveyorJog(delta, false);
             });
         }
 
@@ -605,7 +626,7 @@
                     alert('No valid trial mean available. Record trials first!');
                     return;
                 }
-                sendCommand('jog_conveyor', { steps, forward: true });
+                sendConveyorJog(steps, true);
             });
         }
 
