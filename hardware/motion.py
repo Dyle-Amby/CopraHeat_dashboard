@@ -87,18 +87,27 @@ class StepperConveyor(BaseConveyor):
         self._target_steps = 0
         self._move_forward = True
         self._was_busy = False
+        self._move_started_at: float | None = None
         self._moved_at: float | None = None
 
     @property
     def busy(self) -> bool:
-        # Treat the belt as busy for the first 0.15 s after move() to bridge tx lag.
-        # Clear the stale grace marker as soon as it expires or the stepper goes idle.
-        if self._moved_at is not None:
-            if (time.monotonic() - self._moved_at) < 0.15:
-                return True
+        # A move is considered active until the pulse train has actually gone idle.
+        # We keep the 0.15 s grace window only as a transient local flag; we never
+        # treat a stale stop or repeated poll as a real active move.
+        moved_at = getattr(self, "_moved_at", None)
+        if moved_at is not None and (time.monotonic() - moved_at) >= 0.15:
             self._moved_at = None
-        is_busy = self.stepper.busy
-        if self._was_busy and not is_busy:
+            self._move_started_at = None
+
+        move_started_at = getattr(self, "_move_started_at", None)
+        if move_started_at is not None:
+            if (time.monotonic() - move_started_at) < 0.15:
+                return True
+            self._move_started_at = None
+
+        is_busy = bool(getattr(self.stepper, "busy", False))
+        if getattr(self, "_was_busy", False) and not is_busy:
             self._was_busy = False
             self.last_result = "done"
             if self._move_forward:
@@ -107,23 +116,30 @@ class StepperConveyor(BaseConveyor):
                 self.position_steps -= self._target_steps
             if self.hopper_to_chamber_steps and self._target_steps == self.hopper_to_chamber_steps:
                 self._advance_done = True
+            self._target_steps = 0
+            return False
         return is_busy
 
     def move(self, steps: int, hz: float | None = None, forward: bool = True, now: float | None = None) -> bool:
-        if getattr(self, "_moved_at", None) is not None or getattr(self.stepper, "busy", False):
+        if getattr(self, "_was_busy", False) or getattr(self, "_move_started_at", None) is not None or getattr(self.stepper, "busy", False):
             self.last_result = "refused"
             return False
         if steps <= 0:
             self.last_result = "refused"
             return False
+
         rate = hz if hz is not None and hz > 0 else self.default_hz
         self._target_steps = steps
         self._move_forward = forward
         self.last_result = "starting"
-        self._moved_at = time.monotonic()
+        self._move_started_at = time.monotonic()
+        self._moved_at = self._move_started_at
         try:
             self.stepper.start(steps, rate, forward=forward)
         except Exception as exc:
+            self._move_started_at = None
+            self._moved_at = None
+            self._target_steps = 0
             self.last_result = "refused"
             raise RuntimeError(f"conveyor stepper failed to start move: {exc}") from exc
         self._was_busy = True
@@ -131,22 +147,20 @@ class StepperConveyor(BaseConveyor):
 
     def stop(self) -> int:
         self.creeping = False
+        was_active = bool(getattr(self, "_was_busy", False)) or getattr(self, "_move_started_at", None) is not None or getattr(self.stepper, "busy", False)
+        self._move_started_at = None
         self._moved_at = None
-        if not (self._was_busy or self.stepper.busy):
+        self._was_busy = False
+
+        if not was_active:
             self.last_result = "stopped"
             return 0
 
-        started_at = self._started
         sent = self.stepper.stop()
-        self._was_busy = False
-        self._started = None
         self.last_result = "stopped"
+        self._target_steps = 0
 
-        # A stop is not a completed move. Only count partial progress when the pulse
-        # train was still actively in flight; avoid drift when the belt was already
-        # idle and a stale stop handler keeps firing.
-        stale = started_at is not None and (time.monotonic() - started_at) > 0.5
-        if not stale and sent > 0:
+        if sent > 0:
             if self._move_forward:
                 self.position_steps += sent
             else:
