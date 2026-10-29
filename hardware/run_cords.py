@@ -349,6 +349,10 @@ def resolve_settings(args: argparse.Namespace, conn) -> dict:
     return overrides
 
 
+def conveyor_rate_hz(args: argparse.Namespace) -> float:
+    return args.conveyor_hz or args.sample_hz or 400.0
+
+
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
 
@@ -390,7 +394,7 @@ def main(argv: list[str] | None = None) -> None:
         fan_kwargs["rh_off"] = args.fan_rh_off
 
     # Item 16: Intake advance timing calculation
-    intake_hz = args.conveyor_hz or args.sample_hz or 400.0
+    intake_hz = conveyor_rate_hz(args)
     intake_steps = args.hopper_to_chamber_steps or 0
     expected_intake_s = (intake_steps / intake_hz) if (intake_steps > 0 and intake_hz > 0) else 0.0
 
@@ -413,14 +417,14 @@ def main(argv: list[str] | None = None) -> None:
         conveyor = SimulatedConveyor(
             advance_s=args.intake_advance_s,
             hopper_to_chamber_steps=args.hopper_to_chamber_steps or 2000,
-            default_hz=args.sample_hz or 400.0,
+            default_hz=conveyor_rate_hz(args),
         )
         carriage_driver = SimulatedCarriage()
     else:
         conveyor = StepperConveyor(
             pins.HBS57H_CONVEYOR,
             hopper_to_chamber_steps=args.hopper_to_chamber_steps or 0,
-            default_hz=args.sample_hz or 400.0,
+            default_hz=conveyor_rate_hz(args),
         )
         carriage_driver = CarriageDriver(
             pins.TB6600_CARRIAGE,
@@ -913,7 +917,7 @@ def main(argv: list[str] | None = None) -> None:
                     sorting_flow = SortingFlow(
                         config=grading_cfg_merged,
                         chamber_to_camera_steps=(
-                            grading_cfg_merged.get("camera_to_discharge_steps") or 0
+                            args.chamber_to_camera_steps or 0
                         ),
                         discharge_total_steps=int(
                             grading_cfg_merged.get("discharge_total_steps") or 3000
@@ -921,6 +925,7 @@ def main(argv: list[str] | None = None) -> None:
                         sample_hz=float(
                             grading_cfg_merged.get("sample_hz") or 400.0
                         ),
+                        conveyor_hz=conveyor_rate_hz(args),
                         settle_s=float(
                             grading_cfg_merged.get("settle_s") or 0.3
                         ),

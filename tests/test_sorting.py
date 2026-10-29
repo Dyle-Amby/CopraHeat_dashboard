@@ -16,6 +16,7 @@ class TestSortingFlow(unittest.TestCase):
             chamber_to_camera_steps=2000,
             discharge_total_steps=3000,
             sample_hz=400.0,
+            conveyor_hz=1600.0,
             settle_s=0.3,
             bin_settle_s=1.0,
             bin_verify_timeout_s=5.0,
@@ -47,6 +48,7 @@ class TestSortingFlow(unittest.TestCase):
         # Tick 1: Initiates position move
         self.flow.update(now=100.0, conveyor_busy=False)
         self.assertEqual(self.flow.conveyor_move_steps, 2000)
+        self.assertEqual(self.flow.conveyor_move_hz, 1600.0)
         self.assertEqual(self.flow.conveyor_command, ConveyorCommand.SORT_CREEP)
 
         # Tick 2: Conveyor busy

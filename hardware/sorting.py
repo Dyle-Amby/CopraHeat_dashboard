@@ -57,6 +57,7 @@ class SortingFlow:
     discharge_total_steps: int = 0
     camera_timeout_s: float = 10.0
     sample_hz: float = 400.0
+    conveyor_hz: float = 400.0
     settle_s: float = 0.3
     bin_settle_s: float = 2.0
     bin_verify_timeout_s: float = 15.0
@@ -361,7 +362,7 @@ class SortingFlow:
                 self._position_move_started_at = now
                 self.conveyor_command = ConveyorCommand.SORT_CREEP
                 self.conveyor_move_steps = self.chamber_to_camera_steps
-                self.conveyor_move_hz = self.sample_hz
+                self.conveyor_move_hz = self.conveyor_hz
                 return
 
             # Wait short start grace (0.15s) so tx_busy lag doesn't treat move as immediately done
@@ -608,7 +609,7 @@ class SortingFlow:
                 self._discharge_move_started_at = now
                 self.conveyor_command = ConveyorCommand.SORT_CREEP
                 self.conveyor_move_steps = self.discharge_total_steps
-                self.conveyor_move_hz = self.sample_hz
+                self.conveyor_move_hz = self.conveyor_hz
                 return
 
             discharge_age = now - (self._discharge_move_started_at or now)

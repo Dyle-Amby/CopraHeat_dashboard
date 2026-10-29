@@ -127,9 +127,14 @@ class TestStepperConveyor(unittest.TestCase):
         stepper_mock.start.assert_called_once_with(1500, 500.0, forward=True)
         self.assertTrue(conv.busy)
 
-        # Stepper finishes (Item 12: simulate 0.15s elapsed so grace period passes)
-        stepper_mock.busy = False
+        # Passing the startup grace period must not finish an active pulse train.
         conv._moved_at = 0.0
+        stepper_mock.busy = True
+        self.assertTrue(conv.busy)
+        self.assertEqual(conv.position_steps, 0)
+
+        # Completion is recorded only after the stepper reports idle.
+        stepper_mock.busy = False
         self.assertFalse(conv.busy)
         self.assertEqual(conv.last_result, "done")
         self.assertEqual(conv.position_steps, 1500)

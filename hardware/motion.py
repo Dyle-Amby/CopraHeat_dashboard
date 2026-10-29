@@ -96,6 +96,11 @@ class StepperConveyor(BaseConveyor):
             if (time.monotonic() - moved_at) < 0.15:
                 return True
             self._moved_at = None
+
+        if bool(getattr(self.stepper, "busy", False)):
+            return True
+
+        if getattr(self, "_move_started_at", None) is not None:
             self._move_started_at = None
             self.last_result = "done"
             if self._target_steps:
@@ -107,7 +112,7 @@ class StepperConveyor(BaseConveyor):
                     self._advance_done = True
                 self._target_steps = 0
             return False
-        return bool(getattr(self.stepper, "busy", False))
+        return False
 
     def move(self, steps: int, hz: float | None = None, forward: bool = True, now: float | None = None) -> bool:
         if getattr(self.stepper, "busy", False):

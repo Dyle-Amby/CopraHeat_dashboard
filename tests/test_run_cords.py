@@ -10,6 +10,7 @@ from hardware.run_cords import (
     Actuators,
     capture_camera_frame,
     capture_camera_test_frame,
+    conveyor_rate_hz,
     save_camera_preview,
 )
 from hardware.vision import USBWebcam
@@ -27,6 +28,16 @@ class FakeHX711:
 
     def read_raw_median(self, samples):
         return self.raw_value
+
+
+class ConveyorRateTests(unittest.TestCase):
+    def test_driver_rate_matches_configured_conveyor_rate(self):
+        args = SimpleNamespace(conveyor_hz=2000.0, sample_hz=200.0)
+        self.assertEqual(conveyor_rate_hz(args), 2000.0)
+
+    def test_driver_rate_falls_back_to_sampling_rate_then_default(self):
+        self.assertEqual(conveyor_rate_hz(SimpleNamespace(conveyor_hz=None, sample_hz=250.0)), 250.0)
+        self.assertEqual(conveyor_rate_hz(SimpleNamespace(conveyor_hz=None, sample_hz=None)), 400.0)
 
 
 class ActuatorCalibrationTests(unittest.TestCase):
