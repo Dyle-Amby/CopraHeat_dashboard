@@ -61,6 +61,12 @@ class TestSimulatedConveyorMotion(unittest.TestCase):
         self.assertEqual(sent, 500)
         self.assertEqual(self.conveyor.position_steps, 500)
 
+        # A stale busy-grace marker must not stick around after a stop.
+        self.conveyor._moved_at = None
+        accepted = self.conveyor.move(200, hz=500.0, now=1.1)
+        self.assertTrue(accepted)
+        self.assertTrue(self.conveyor.busy)
+
         # Close is safe and idempotent
         self.conveyor.close()
         self.assertFalse(self.conveyor.busy)

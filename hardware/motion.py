@@ -91,9 +91,12 @@ class StepperConveyor(BaseConveyor):
 
     @property
     def busy(self) -> bool:
-        # Treat the belt as busy for the first 0.15 s after move() to bridge tx lag
-        if self._moved_at is not None and (time.monotonic() - self._moved_at) < 0.15:
-            return True
+        # Treat the belt as busy for the first 0.15 s after move() to bridge tx lag.
+        # Clear the stale grace marker as soon as it expires or the stepper goes idle.
+        if self._moved_at is not None:
+            if (time.monotonic() - self._moved_at) < 0.15:
+                return True
+            self._moved_at = None
         is_busy = self.stepper.busy
         if self._was_busy and not is_busy:
             self._was_busy = False
@@ -125,6 +128,7 @@ class StepperConveyor(BaseConveyor):
 
     def stop(self) -> int:
         self.creeping = False
+        self._moved_at = None
         if self._was_busy or self.stepper.busy:
             sent = self.stepper.stop()
             self._was_busy = False
