@@ -363,7 +363,7 @@ def main(argv: list[str] | None = None) -> None:
     j = sub.add_parser("jog", help="move one stepper an exact number of steps")
     j.add_argument("motor", choices=MOTORS)
     j.add_argument("--steps", type=int, default=200)
-    j.add_argument("--hz", type=float, default=400.0, help="steps per second")
+    j.add_argument("--hz", "-hz", type=float, default=400.0, help="steps per second")
     j.add_argument("--reverse", action="store_true")
     j.add_argument("--invert-dir", action="store_true", help="swap what counts as forward")
     j.add_argument("--from-switch", action="store_true",

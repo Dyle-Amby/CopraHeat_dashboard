@@ -1,6 +1,7 @@
 import contextlib
 import io
 import unittest
+from unittest import mock
 
 from hardware import bench, pins
 
@@ -25,6 +26,16 @@ class BenchCliTest(unittest.TestCase):
 
     def test_unknown_motor_rejected(self):
         self.parse_fails(["jog", "servo"])
+
+    def test_jog_accepts_legacy_single_dash_hz(self):
+        with mock.patch.object(bench, "jog") as jog, mock.patch.object(bench.signal, "signal"):
+            bench.main(["jog", "conveyor", "--steps", "10000", "-hz", "2000", "--reverse"])
+
+        args = jog.call_args.args[0]
+        self.assertEqual(args.motor, "conveyor")
+        self.assertEqual(args.steps, 10000)
+        self.assertEqual(args.hz, 2000)
+        self.assertTrue(args.reverse)
 
     def test_hopper_calibration_points_elsewhere(self):
         # the hopper needs two tare offsets; run_hopper --calibrate owns that
