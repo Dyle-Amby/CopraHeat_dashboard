@@ -189,7 +189,7 @@ document.addEventListener('DOMContentLoaded', function () {
         feedback('Enter a positive number of minutes for the drying timer.', 'refused');
         return;
       }
-      await run('set_drying_timer', JSON.stringify({ duration_min: minutes }));
+      await run('set_drying_timer', { duration_min: minutes });
       $('dryingTimerInput').blur();
     });
   }

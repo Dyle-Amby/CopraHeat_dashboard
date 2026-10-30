@@ -139,6 +139,13 @@ class TestCommands(AppCase):
         self.assertEqual(body["status"], db.PENDING)
         self.assertEqual([c["id"] for c in db.pending_commands(self.conn)], [body["id"]])
 
+    def test_drying_timer_accepts_minutes_object(self):
+        self.supervisor_up("drying")
+        resp = self.post_command("set_drying_timer", {"duration_min": 45})
+
+        self.assertEqual(resp.status_code, 202)
+        self.assertEqual(db.pending_commands(self.conn)[0]["payload"], '{"duration_s": 2700.0}')
+
     def test_unknown_or_missing_names_are_rejected(self):
         self.supervisor_up()
         self.assertEqual(self.post_command("launch_missiles").status_code, 400)
