@@ -1296,6 +1296,12 @@ def main(argv: list[str] | None = None) -> None:
                         supervisor_pid=pid,
                         batch_id=batch_id,
                         elapsed_s=controller.elapsed_s(now),
+                        drying_remaining_s=(
+                            max(0.0, controller.drying_timer_deadline - now)
+                            if commands.state is BatchState.DRYING
+                            and controller.drying_timer_deadline is not None
+                            else None
+                        ),
                         target_kg=controller.target_kg,
                         gate_open=commands.gate_open,
                         conveyor=commands.conveyor.value,

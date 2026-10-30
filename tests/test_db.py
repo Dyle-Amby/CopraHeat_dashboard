@@ -187,13 +187,15 @@ class TestSchema(DBCase):
         # Now run db.init to trigger migration
         db.init(conn)
 
-        # 1. PRAGMA user_version is 3
+        # 1. PRAGMA user_version is current
         ver = conn.execute("PRAGMA user_version").fetchone()[0]
-        self.assertEqual(ver, 3)
+        self.assertEqual(ver, db.SCHEMA_VERSION)
 
         # 2. Existing batch preserved and has drying_timed_out = 0
         b_cols = {r["name"] for r in conn.execute("PRAGMA table_info(batches)")}
         self.assertIn("drying_timed_out", b_cols)
+        m_cols = {r["name"] for r in conn.execute("PRAGMA table_info(machine_state)")}
+        self.assertIn("drying_remaining_s", m_cols)
         row = conn.execute("SELECT target_kg, drying_timed_out FROM batches WHERE id = 1").fetchone()
         self.assertEqual(row["target_kg"], 4.2)
         self.assertEqual(row["drying_timed_out"], 0)

@@ -91,12 +91,16 @@ class TestLive(AppCase):
 
     def test_running_supervisor_with_a_batch(self):
         batch_id = db.start_batch(self.conn, target_kg=2.0)
-        self.supervisor_up("drying", batch_id=batch_id, chamber_c=64.5, alarms=["overtemp"])
+        self.supervisor_up(
+            "drying", batch_id=batch_id, chamber_c=64.5,
+            drying_remaining_s=420.0, alarms=["overtemp"],
+        )
         body = self.client.get("/api/live").get_json()
         self.assertEqual(body["supervisor"], "running")
         self.assertEqual(body["chamber_c"], 64.5)
         self.assertEqual(body["alarms"], ["overtemp"])
         self.assertEqual(body["batch"]["id"], batch_id)
+        self.assertEqual(body["drying_remaining_s"], 420.0)
 
     def test_clean_stop_and_dead_process_are_told_apart(self):
         self.supervisor_up()

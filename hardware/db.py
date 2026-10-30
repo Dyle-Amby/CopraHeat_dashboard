@@ -22,7 +22,7 @@ import sqlite3
 
 from hardware.batch import COMMAND_NAMES, BatchRecord
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # app.py must run from inside CopraHeat_dashboard, but the supervisor may not,
 # so anchor the default to this file rather than the working directory
@@ -180,6 +180,7 @@ CREATE TABLE IF NOT EXISTS machine_state (
     batch_id       INTEGER,
     state          TEXT    NOT NULL,
     elapsed_s      REAL,
+    drying_remaining_s REAL,
     chamber_c      REAL,
     exhaust_c      REAL,
     exhaust_rh     REAL,
@@ -338,6 +339,8 @@ def _ensure_prompt_and_timer_columns(conn: sqlite3.Connection) -> None:
         m_cols = [row[1] for row in cur.fetchall()]
         if "active_prompt" not in m_cols:
             cur.execute("ALTER TABLE machine_state ADD COLUMN active_prompt TEXT")
+        if "drying_remaining_s" not in m_cols:
+            cur.execute("ALTER TABLE machine_state ADD COLUMN drying_remaining_s REAL")
 
 
 def init(conn: sqlite3.Connection) -> None:
@@ -347,7 +350,7 @@ def init(conn: sqlite3.Connection) -> None:
         migrate_v2_to_v3(conn)
     elif version == 2:
         migrate_v2_to_v3(conn)
-    elif version not in (0, SCHEMA_VERSION):
+    elif version not in (0, 3, SCHEMA_VERSION):
         raise RuntimeError(
             f"database schema is version {version}, this build expects {SCHEMA_VERSION}. "
             "There are no migrations for this version -- move the file aside or run backup."
@@ -550,6 +553,7 @@ def update_live(
     supervisor_pid: int | None,
     batch_id: int | None = None,
     elapsed_s: float | None = None,
+    drying_remaining_s: float | None = None,
     chamber_c: float | None = None,
     exhaust_c: float | None = None,
     exhaust_rh: float | None = None,
@@ -576,12 +580,12 @@ def update_live(
             prompt_json = active_prompt
     conn.execute(
         """INSERT OR REPLACE INTO machine_state
-               (id, updated_at, supervisor_pid, batch_id, state, elapsed_s,
+               (id, updated_at, supervisor_pid, batch_id, state, elapsed_s, drying_remaining_s,
                 chamber_c, exhaust_c, exhaust_rh, exhaust_ah, hopper_kg, target_kg,
                 heater_on, fans_on, fan_reason, gate_open, conveyor, alarms, components, active_prompt)
-           VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            now_iso(), supervisor_pid, batch_id, state, elapsed_s,
+            now_iso(), supervisor_pid, batch_id, state, elapsed_s, drying_remaining_s,
             chamber_c, exhaust_c, exhaust_rh, exhaust_ah, hopper_kg, target_kg,
             int(heater_on), int(fans_on), fan_reason, int(gate_open), conveyor,
             json.dumps(sorted(alarms or [])), comp_json, prompt_json,

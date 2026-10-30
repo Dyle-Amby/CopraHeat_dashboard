@@ -205,6 +205,9 @@ document.addEventListener('DOMContentLoaded', function () {
     $('batchNo').textContent = batch ? batch.id : '—';
     $('batchStarted').textContent = batch ? C.date(batch.started_at) : 'No batch running';
     $('batchElapsed').textContent = batch ? C.elapsed(live.elapsed_s) : '—';
+    $('dryingRemaining').textContent = state !== 'drying'
+      ? '—'
+      : (live.drying_remaining_s == null ? 'Until endpoint' : C.elapsed(Math.max(0, live.drying_remaining_s)));
 
     $('chamberValue').textContent = C.num(live.chamber_c, 1, '°C');
     $('chamberNote').textContent = chamberNote(state, live.chamber_c);
